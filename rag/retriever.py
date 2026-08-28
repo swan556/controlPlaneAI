@@ -99,6 +99,15 @@ class RAGRetriever:
 
             intersection = sent_tokens.intersection(context_tokens)
             score = len(intersection) / len(sent_tokens) if sent_tokens else 1.0
+
+            # Strict numerical hallucination check:
+            # If the sentence contains a number not present anywhere in the context chunk, fail it.
+            numbers_in_sent = re.findall(r'\b\d+\b', sent)
+            for num in numbers_in_sent:
+                if num not in context:
+                    score = 0.0
+                    break
+
             sentence_scores.append(score)
 
             if score < 0.35:
