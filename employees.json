@@ -1,0 +1,47 @@
+[
+  {
+    "employee_id": "EMP-001",
+    "name": "Sarah Jenkins",
+    "department": "Engineering",
+    "role": "Senior Backend Developer",
+    "email": "s.jenkins@example.com",
+    "salary": 145000,
+    "clearance_level": "Tier 3"
+  },
+  {
+    "employee_id": "EMP-002",
+    "name": "Marcus Thorne",
+    "department": "Human Resources",
+    "role": "HR Director",
+    "email": "m.thorne@example.com",
+    "salary": 120000,
+    "clearance_level": "Tier 4"
+  },
+  {
+    "employee_id": "EMP-003",
+    "name": "Elena Rodriguez",
+    "department": "Sales",
+    "role": "Account Executive",
+    "email": "e.rodriguez@example.com",
+    "salary": 85000,
+    "clearance_level": "Tier 1"
+  },
+  {
+    "employee_id": "EMP-004",
+    "name": "David Chen",
+    "department": "Engineering",
+    "role": "DevOps Engineer",
+    "email": "d.chen@example.com",
+    "salary": 130000,
+    "clearance_level": "Tier 3"
+  },
+  {
+    "employee_id": "EMP-005",
+    "name": "Aisha Patel",
+    "department": "Customer Support",
+    "role": "Support Specialist",
+    "email": "a.patel@example.com",
+    "salary": 65000,
+    "clearance_level": "Tier 1"
+  }
+]

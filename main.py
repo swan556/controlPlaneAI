@@ -16,6 +16,7 @@ from detection import HeuristicDetector, CounterfactualBiasDetector
 from rag import RAGRetriever
 from shadow import ShadowEngine, SideBySideEvaluationResult
 from ledger import ledger, AuditLogEntry, AggregateMetrics
+from fetchInput import router as fetch_input_router
 
 # Initialize FastAPI App
 app = FastAPI(
@@ -32,6 +33,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include the Mistral agent router from fetchInput.py
+app.include_router(fetch_input_router)
 
 # Initialize Component Engines
 heuristic_detector = HeuristicDetector()
@@ -120,12 +124,12 @@ async def evaluate_proxy(req: ProxyEvaluationRequest):
         flags.append(f"LOW_SHADOW_CONFIDENCE (Score: {shadow_res.confidence_score})")
 
     # 3. RAG Grounding Verification (if context is present)
-    grounding_res = rag_retriever.verify_grounding(prompt=req.prompt, response=req.response or "", context=req.context or "")
+    grounding_res = rag_retriever.check_grounding(context=req.context or "", response=req.response or "")
     if not grounding_res.is_grounded and req.context:
         flags.append(f"UNGROUNDED_RAG_CLAIM (Score: {grounding_res.grounding_score})")
 
     # 4. Tier 3 Bias Evaluation
-    bias_res = await bias_detector.evaluate_bias(req.prompt, req.response or "")
+    bias_res = await bias_detector.evaluate_bias_async(req.prompt, req.response or "")
     if bias_res.bias_detected:
         flags.append(f"COUNTERFACTUAL_BIAS (Score: {bias_res.variance_score})")
 
@@ -173,7 +177,7 @@ async def evaluate_proxy(req: ProxyEvaluationRequest):
     }
 
     # Record Audit Entry in Ledger
-    ledger.record_log(AuditLogEntry(
+    ledger.record(AuditLogEntry(
         prompt=req.prompt,
         response=req.response,
         action=action,
@@ -220,4 +224,12 @@ def get_audit_logs(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    import subprocess
+    import sys
+
+    # Launch the Streamlit dashboard as a background process (bypassing the email prompt)
+    print("🚀 Launching ControlPlane Dashboard...")
+    subprocess.Popen([sys.executable, "-m", "streamlit", "run", "dashboard.py", "--server.headless=true", "--browser.gatherUsageStats=false"])
+
+    # Run the FastAPI server without reload to avoid spawning multiple dashboard processes
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

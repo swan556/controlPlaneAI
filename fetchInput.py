@@ -1,7 +1,7 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from mistralai.client import Mistral
 from pydantic import BaseModel
@@ -14,7 +14,7 @@ from rag.retriever import RAGRetriever
 
 load_dotenv()
 
-app = FastAPI()
+router = APIRouter()
 client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 
 # Initialize Pathways Globally
@@ -41,7 +41,7 @@ def run_rag_check(text: str) -> bool:
     return result.is_grounded
 
 # --- 1. Real-Time Streaming Endpoint ---
-@app.post("/stream-check")
+@router.post("/stream-check")
 async def stream_with_controlplane(payload: PromptRequest):
     if not os.getenv("MISTRAL_API_KEY"):
         raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
@@ -138,7 +138,7 @@ async def stream_with_controlplane(payload: PromptRequest):
 
 
 # --- 2. Complete Response Endpoint ---
-@app.post("/generate-full")
+@router.post("/generate-full")
 async def generate_full_response(payload: PromptRequest):
     if not os.getenv("MISTRAL_API_KEY"):
         raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
