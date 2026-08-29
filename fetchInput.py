@@ -40,7 +40,30 @@ def run_rag_check(text: str) -> bool:
     result = rag_retriever.check_grounding(context_str, text)
     return result.is_grounded
 
-# --- 1. Real-Time Streaming Endpoint ---
+# --- 1. Raw Streaming Endpoint (Mistral Only) ---
+@router.post("/stream-raw")
+async def stream_raw(payload: PromptRequest):
+    if not os.getenv("MISTRAL_API_KEY"):
+        raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
+
+    async def token_stream_generator():
+        try:
+            stream_response = await client.agents.stream_async(
+                agent_id="ag_01a048474f7872db90a903ea31477b48",
+                messages=[{"role": "user", "content": payload.prompt}]
+            )
+            async for chunk in stream_response:
+                token = chunk.data.choices[0].delta.content
+                if token:
+                    # Adding space or yielding raw, we can yield raw but dashboard reads words.
+                    # Yielding token directly without processing.
+                    yield token
+        except Exception as e:
+            yield f"\n[Stream Error: {str(e)}]"
+
+    return StreamingResponse(token_stream_generator(), media_type="text/event-stream")
+
+# --- 2. Real-Time Streaming Endpoint (ControlPlane) ---
 @router.post("/stream-check")
 async def stream_with_controlplane(payload: PromptRequest):
     if not os.getenv("MISTRAL_API_KEY"):
