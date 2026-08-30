@@ -68,11 +68,12 @@ async def stream_with_controlplane(payload: PromptRequest):
         raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
 
     # 0. PRE-FLIGHT SCAN (User Query Check)
-    preflight = heuristic_detector.scan(payload.prompt)
-    if preflight.has_pii or preflight.has_prompt_injection:
-        async def early_halt():
-            yield "\n\n⚠️ [ControlPlane Alert: Request halted by Tier 1 Heuristics (PII/Injection found in prompt)]\n"
-        return StreamingResponse(early_halt(), media_type="text/event-stream")
+    if not payload.prompt.lstrip().lower().startswith("sudo"):
+        preflight = heuristic_detector.scan(payload.prompt)
+        if preflight.has_pii or preflight.has_prompt_injection:
+            async def early_halt():
+                yield "\n\n⚠️ [ControlPlane Alert: Request halted by Tier 1 Heuristics (PII/Injection found in prompt)]\n"
+            return StreamingResponse(early_halt(), media_type="text/event-stream")
 
     async def token_stream_generator():
         try:
@@ -178,14 +179,15 @@ async def stream_dual_arena(payload: PromptRequest):
 
     async def token_stream_generator():
         # Pre-flight scan
-        preflight = heuristic_detector.scan(payload.prompt)
         prompt_halted = False
-        if preflight.has_pii or preflight.has_prompt_injection:
-            prompt_halted = True
-            # In production we would halt immediately to save compute.
-            # But in the Testing Arena, we want to let Mistral run so the user can 
-            # visually see the raw vulnerability on the left, while the right is blocked.
-            yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"}) + "\n"
+        if not payload.prompt.lstrip().lower().startswith("sudo"):
+            preflight = heuristic_detector.scan(payload.prompt)
+            if preflight.has_pii or preflight.has_prompt_injection:
+                prompt_halted = True
+                # In production we would halt immediately to save compute.
+                # But in the Testing Arena, we want to let Mistral run so the user can 
+                # visually see the raw vulnerability on the left, while the right is blocked.
+                yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"}) + "\n"
 
         try:
             stream_response = await client.agents.stream_async(

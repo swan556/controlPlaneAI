@@ -4,6 +4,8 @@ Fast regex-based pattern matching and rule engines for detecting sensitive data 
 """
 
 import re
+import unicodedata
+import difflib
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from config import UserRole, DocumentClassification
@@ -116,28 +118,121 @@ class HeuristicDetector:
         ]
     }
 
+    # Leetspeak / l33tspeak character substitution table.
+    # Maps digit/symbol lookalikes back to their alphabetic equivalents.
+    # Applied ONLY to characters inside word-like tokens to avoid false-positives
+    # on standalone numbers (e.g. "$130,000" should not become "$I3O,OOO").
+    _LEET_TABLE = str.maketrans({
+        '4': 'a', '@': 'a',
+        '3': 'e',
+        '1': 'i', '!': 'i',
+        '0': 'o',
+        '7': 't',
+        '5': 's', '$': 's',
+        '6': 'g',
+        '8': 'b',
+    })
+
+    def _normalize_text(self, text: str) -> str:
+        """
+        Produce a de-obfuscated version of *text* for heuristic scanning.
+
+        Steps:
+          1. Unicode NFKD decomposition + ASCII encode/decode strips accents and
+             homoglyphs (e.g. Cyrillic 'а' -> 'a', 'Thorné' -> 'Thorne').
+          2. Word-level Leetspeak translation maps digit lookalikes back to their
+             alphabetic form (e.g. 'S4r4h' -> 'Sarah', 'c0mp3ns4t10n' -> 'compensation').
+
+        The original text is always scanned alongside the normalized version so
+        that genuinely numeric patterns (SSNs, salary figures, phone numbers) are
+        still caught by the standard regexes.
+        """
+        # Step 1 – Unicode normalization (strip accents / homoglyphs)
+        try:
+            nfkd = unicodedata.normalize('NFKD', text)
+            ascii_text = nfkd.encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            ascii_text = text
+
+        # Step 2 – Leetspeak de-obfuscation (only inside word-like tokens)
+        # Matches any non-whitespace run containing letters + leet digits,
+        # the hallmark of leetspeak (e.g. 'S4r4h', 'J3nk1ns', '0n3').
+        # We deliberately avoid \b here because it fails on alpha-digit boundaries.
+        leet_pattern = re.compile(r'\S+')
+
+        def _deleet_token(m: re.Match) -> str:
+            token = m.group()
+            # Only apply the leet table if the token mixes letters AND digit-lookalikes.
+            # _LEET_TABLE is an ordinal (int) keyed dict from str.maketrans, so
+            # we must check ord(c) — not c — for membership.
+            has_alpha = any(c.isalpha() for c in token)
+            has_leet  = any(ord(c) in self._LEET_TABLE for c in token)
+            if has_alpha and has_leet:
+                return token.translate(self._LEET_TABLE)
+            return token
+
+        normalized = leet_pattern.sub(_deleet_token, ascii_text)
+        return normalized
+
     def __init__(self):
         self.compiled_pii = {key: re.compile(pat, re.IGNORECASE) for key, pat in self.PII_PATTERNS.items()}
-        
-        # Exact Data Match (EDM) for internal employee names
+
+        # Exact Data Match (EDM) for internal employee names — both strict regex
+        # AND a fuzzy name list used by the SequenceMatcher n-gram scanner.
         import json
         import os
+        self.internal_names: List[str] = []  # lowercased full names for fuzzy matching
         try:
             base_dir = os.path.dirname(os.path.dirname(__file__))
             emp_path = os.path.join(base_dir, 'employees.json')
             with open(emp_path, 'r') as f:
                 employees = json.load(f)
-                names = [re.escape(emp['name']) for emp in employees if 'name' in emp]
-                if names:
-                    edm_pattern = r'\b(?:' + '|'.join(names) + r')\b'
+                names = [emp['name'] for emp in employees if 'name' in emp]
+                # Store normalized lowercase names for fuzzy matching
+                self.internal_names = [self._normalize_text(n).lower() for n in names]
+                # Build strict EDM regex for exact matches
+                escaped = [re.escape(n) for n in names]
+                if escaped:
+                    edm_pattern = r'\b(?:' + '|'.join(escaped) + r')\b'
                     self.compiled_pii["INTERNAL_EMPLOYEE_NAME"] = re.compile(edm_pattern, re.IGNORECASE)
-        except Exception as e:
-            pass # Fallback gracefully if database missing
+        except Exception:
+            pass  # Fallback gracefully if database missing
 
         self.compiled_injections = {}
         for category, patterns in self.INJECTION_PATTERNS.items():
             combined = "|".join(f"(?:{p})" for p in patterns)
             self.compiled_injections[category] = re.compile(combined, re.IGNORECASE)
+
+    def _fuzzy_name_scan(self, normalized_text: str) -> int:
+        """
+        N-gram fuzzy matching against the internal employee name list.
+
+        Splits the normalized text into overlapping 2-word and 3-word windows
+        (n-grams) and computes a SequenceMatcher similarity ratio against each
+        known employee name.  A ratio above FUZZY_THRESHOLD is treated as a
+        probable name match — catching typos like 'Davd Chen' vs 'David Chen'.
+
+        Returns the number of fuzzy name matches found.
+        """
+        FUZZY_THRESHOLD = 0.82  # tunable — 0.82 catches 1-char typos cleanly
+        if not self.internal_names:
+            return 0
+
+        # Strip punctuation and markdown (like **, commas) before splitting
+        clean_text = re.sub(r'[^\w\s]', '', normalized_text.lower())
+        words = clean_text.split()
+        
+        hits = 0
+        # Slide a window of width 2 and 3 over the word list
+        for width in (2, 3):
+            for i in range(len(words) - width + 1):
+                ngram = " ".join(words[i:i + width])
+                for known_name in self.internal_names:
+                    ratio = difflib.SequenceMatcher(None, ngram, known_name).ratio()
+                    if ratio >= FUZZY_THRESHOLD:
+                        hits += 1
+                        break  # one match per window position is enough
+        return hits
 
     def scan(
         self,
@@ -147,6 +242,10 @@ class HeuristicDetector:
     ) -> HeuristicDetectionResult:
         """
         Scan text for PII, Privacy Leaks, Prompt Injection, and Hierarchical RBAC compliance.
+
+        The scanner operates on BOTH the raw text and a de-obfuscated normalized
+        copy, so Leetspeak, homoglyphs, and accented characters are caught by the
+        same regex rules without any changes to those patterns.
         """
         if not text:
             return HeuristicDetectionResult(
@@ -161,32 +260,47 @@ class HeuristicDetector:
                 tier1_risk_score=0.0
             )
 
+        # Produce a de-obfuscated copy for heuristic scanning
+        normalized_text = self._normalize_text(text)
+
         detected_pii_types = []
         pii_count = 0
 
-        # 1. Privacy & PII Scan (individual field patterns)
+        # 1. Privacy & PII Scan — run each regex on BOTH raw and normalized text
+        #    so we catch both plain-text and obfuscated variants.
         for pii_type, regex in self.compiled_pii.items():
             matches = regex.findall(text)
-            if matches:
+            # Also scan the normalized (de-obfuscated) version
+            norm_matches = regex.findall(normalized_text)
+            all_matches = matches or norm_matches
+            if all_matches:
                 detected_pii_types.append(pii_type)
-                pii_count += len(matches)
+                pii_count += len(all_matches)
+
+        # 1c. Fuzzy EDM — catches typo-obfuscated employee names (e.g. 'Davd Chen')
+        fuzzy_hits = self._fuzzy_name_scan(normalized_text)
+        if fuzzy_hits > 0 and "INTERNAL_EMPLOYEE_NAME" not in detected_pii_types:
+            detected_pii_types.append("INTERNAL_EMPLOYEE_NAME_FUZZY")
+            pii_count += fuzzy_hits
 
         # 1b. Structural HR Data Block Scan
         # Fires when 2+ labeled HR fields appear together — catches full employee record dumps
         # (e.g. "Name: X\nRole: Y\nDepartment: Z\nEmployee ID: EMP...") even if each field
         # individually seems innocuous in isolation.
+        # Also scan the normalized copy so obfuscated HR blocks are caught.
         hr_fields_found = sum(
-            1 for pattern in self.HR_BLOCK_FIELD_PATTERNS if pattern.search(text)
+            1 for pattern in self.HR_BLOCK_FIELD_PATTERNS
+            if pattern.search(text) or pattern.search(normalized_text)
         )
         if hr_fields_found >= 2:
             if "HR_EMPLOYEE_RECORD_DUMP" not in detected_pii_types:
                 detected_pii_types.append("HR_EMPLOYEE_RECORD_DUMP")
                 pii_count += hr_fields_found
 
-        # 2. Prompt Injection Scan
+        # 2. Prompt Injection Scan — on both raw and normalized text
         detected_injections = []
         for category, regex in self.compiled_injections.items():
-            if regex.search(text):
+            if regex.search(text) or regex.search(normalized_text):
                 detected_injections.append(category)
 
         # 3. Hierarchical RBAC Verification
