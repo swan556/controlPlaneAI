@@ -32,9 +32,64 @@ class HeuristicDetector:
         "CREDIT_CARD": r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b',
         "PHONE_NUMBER": r'\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b',
         "API_KEY": r'\b(?:sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|bearer\s+[A-Za-z0-9._\-]{20,})\b',
-        "INTERNAL_SALARY_DATA": r'\b(salary|compensation|bonus\s+pool|stock\s+options)\s*[:=]\s*\$\d+[\d,]*\b',
-        "CONFIDENTIAL_MARKING": r'\b(confidential|internal\s+only|do\s+not\s+distribute|top\s+secret|restricted\s+data)\b'
+        "INTERNAL_SALARY_DATA": r'\b(salary|compensation|bonus\s+pool|stock\s+options)\s*[:=]\s*\$?\d+[\d,]*\b',
+        "CONFIDENTIAL_MARKING": r'\b(confidential|internal\s+only|do\s+not\s+distribute|top\s+secret|restricted\s+data)\b',
+
+        # --- HR & Employee Record PII (catches structured data card dumps) ---
+
+        # Employee ID in any common format: EMP001, EMP-4821, E-12345, ID: EMP..., Employee ID: ...
+        "EMPLOYEE_ID": (
+            r'\b(employee\s*(?:id|number|no|#)\s*[:=]?\s*[A-Z0-9\-]{2,12})'
+            r'|\b(emp[-]?[A-Z0-9]{2,10})\b'
+            r'|\b([Ee]-\d{3,8})\b'
+        ),
+
+        # Labeled HR fields: "Name:", "Full Name:", "Department:", "Division:",
+        # "Current Role:", "Job Title:", "Position:", "Designation:"
+        "HR_DATA_FIELD": (
+            r'\b(full\s+name|employee\s+name|name)\s*[:=]\s*[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+'
+            r'|\b(department|division|business\s+unit|team)\s*[:=]\s*\w[\w\s]{1,40}'
+            r'|\b(current\s+role|job\s+title|position|designation|title|role)\s*[:=]\s*\w[\w\s]{1,50}'
+            r'|\b(manager|reporting\s+to|direct\s+report|supervisor)\s*[:=]\s*[A-Z][a-zA-Z\s]{2,40}'
+            r'|\b(date\s+of\s+(?:birth|joining|hire)|dob|start\s+date|joining\s+date)\s*[:=]\s*[\d\w\s,/-]{4,20}'
+            r'|\b(location|office|site|work\s+location)\s*[:=]\s*\w[\w\s,.-]{1,40}'
+        ),
+
+        # Person name immediately following a "Name:" labeled field
+        # Matches: "Name: John Smith", "Employee Name: Sarah Jenkins"
+        "PERSON_NAME_LABELED": (
+            r'(?:name|employee|candidate|applicant|worker|staff)\s*[:=]\s*'
+            r'([A-Z][a-z]{1,20}(?:\s+[A-Z][a-z]{1,20}){1,3})'
+        ),
+
+        # Salary / compensation figures without $ sign (e.g. "Salary: 95000", "CTC: 12,00,000")
+        "SALARY_NUMERIC": (
+            r'\b(salary|ctc|compensation|package|annual\s+pay|base\s+pay|gross\s+pay|net\s+pay|remuneration)'
+            r'\s*[:=]\s*[\$\u20B9\u00A3\u20AC]?\s*[\d,]{4,}'
+        ),
+
+        # Performance ratings tied to named employees (e.g. "Rating: 4.5", "Score: Exceeds Expectations")
+        "PERFORMANCE_DATA": (
+            r'\b(performance\s+rating|review\s+score|appraisal\s+score|kpi\s+score|okr\s+score)'
+            r'\s*[:=]\s*[\d.]+'
+            r'|\b(exceeds?\s+expectations?|meets?\s+expectations?|needs?\s+improvement|outstanding\s+performer|low\s+performer)\b'
+        ),
     }
+
+    # Structural HR data block: fires when 2+ labeled HR fields appear within a short window of text.
+    # This catches full employee record dumps even when individual fields appear innocuous.
+    HR_BLOCK_FIELD_PATTERNS = [
+        re.compile(p, re.IGNORECASE) for p in [
+            r'\b(name|full\s+name|employee\s+name)\s*[:=]',
+            r'\b(department|division|team|business\s+unit)\s*[:=]',
+            r'\b(role|title|position|designation|current\s+role|job\s+title)\s*[:=]',
+            r'\b(employee\s*(?:id|number|no)|emp[-]?[A-Z0-9]{2,})',
+            r'\b(salary|ctc|compensation|package)\s*[:=]',
+            r'\b(manager|supervisor|reporting\s+to)\s*[:=]',
+            r'\b(date\s+of\s+(?:birth|joining|hire)|dob|start\s+date)\s*[:=]',
+            r'\b(performance\s+rating|appraisal|review\s+score)\s*[:=]',
+        ]
+    ]
 
     # Prompt Injection & Jailbreak Heuristic Keywords
     INJECTION_PATTERNS = {
@@ -92,12 +147,24 @@ class HeuristicDetector:
         detected_pii_types = []
         pii_count = 0
 
-        # 1. Privacy & PII Scan
+        # 1. Privacy & PII Scan (individual field patterns)
         for pii_type, regex in self.compiled_pii.items():
             matches = regex.findall(text)
             if matches:
                 detected_pii_types.append(pii_type)
                 pii_count += len(matches)
+
+        # 1b. Structural HR Data Block Scan
+        # Fires when 2+ labeled HR fields appear together — catches full employee record dumps
+        # (e.g. "Name: X\nRole: Y\nDepartment: Z\nEmployee ID: EMP...") even if each field
+        # individually seems innocuous in isolation.
+        hr_fields_found = sum(
+            1 for pattern in self.HR_BLOCK_FIELD_PATTERNS if pattern.search(text)
+        )
+        if hr_fields_found >= 2:
+            if "HR_EMPLOYEE_RECORD_DUMP" not in detected_pii_types:
+                detected_pii_types.append("HR_EMPLOYEE_RECORD_DUMP")
+                pii_count += hr_fields_found
 
         # 2. Prompt Injection Scan
         detected_injections = []
