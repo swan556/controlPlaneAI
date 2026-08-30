@@ -1,12 +1,9 @@
 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
 [transformers] `torch_dtype` is deprecated! Use `dtype` instead!
-Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 3533.63it/s]
-Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 3043.97it/s]
-INFO:     Started server process [31335]
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 3405.94it/s]
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 3009.48it/s]
+INFO:     Started server process [38446]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8005 (Press CTRL+C to quit)
-INFO:     127.0.0.1:50482 - "POST /stream-dual HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56896 - "POST /stream-dual HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56906 - "POST /stream-dual HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56916 - "POST /stream-dual HTTP/1.1" 200 OK
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:44036 - "GET /health HTTP/1.1" 200 OK

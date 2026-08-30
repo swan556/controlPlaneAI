@@ -43,5 +43,140 @@
     "email": "a.patel@example.com",
     "salary": 65000,
     "clearance_level": "Tier 1"
+  },
+  {
+    "employee_id": "EMP-006",
+    "name": "Michael Brooks",
+    "department": "Engineering",
+    "role": "Frontend Developer",
+    "email": "m.brooks@example.com",
+    "salary": 110000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-007",
+    "name": "Priya Nair",
+    "department": "Engineering",
+    "role": "Software Engineer",
+    "email": "p.nair@example.com",
+    "salary": 105000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-008",
+    "name": "Daniel Foster",
+    "department": "Finance",
+    "role": "Finance Manager",
+    "email": "d.foster@example.com",
+    "salary": 115000,
+    "clearance_level": "Tier 3"
+  },
+  {
+    "employee_id": "EMP-009",
+    "name": "Rachel Kim",
+    "department": "Product",
+    "role": "Product Manager",
+    "email": "r.kim@example.com",
+    "salary": 125000,
+    "clearance_level": "Tier 3"
+  },
+  {
+    "employee_id": "EMP-010",
+    "name": "Thomas Wilson",
+    "department": "Customer Support",
+    "role": "Support Team Lead",
+    "email": "t.wilson@example.com",
+    "salary": 78000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-011",
+    "name": "Nina Kapoor",
+    "department": "Marketing",
+    "role": "Marketing Manager",
+    "email": "n.kapoor@example.com",
+    "salary": 98000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-012",
+    "name": "James Mitchell",
+    "department": "Sales",
+    "role": "Sales Manager",
+    "email": "j.mitchell@example.com",
+    "salary": 105000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-013",
+    "name": "Sofia Martinez",
+    "department": "Engineering",
+    "role": "QA Engineer",
+    "email": "s.martinez@example.com",
+    "salary": 92000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-014",
+    "name": "Robert Hayes",
+    "department": "Operations",
+    "role": "Operations Manager",
+    "email": "r.hayes@example.com",
+    "salary": 108000,
+    "clearance_level": "Tier 3"
+  },
+  {
+    "employee_id": "EMP-015",
+    "name": "Grace Liu",
+    "department": "Design",
+    "role": "UX Designer",
+    "email": "g.liu@example.com",
+    "salary": 95000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-016",
+    "name": "Andrew Collins",
+    "department": "IT",
+    "role": "IT Administrator",
+    "email": "a.collins@example.com",
+    "salary": 100000,
+    "clearance_level": "Tier 3"
+  },
+  {
+    "employee_id": "EMP-017",
+    "name": "Maya Singh",
+    "department": "Customer Support",
+    "role": "Technical Support Specialist",
+    "email": "m.singh@example.com",
+    "salary": 72000,
+    "clearance_level": "Tier 1"
+  },
+  {
+    "employee_id": "EMP-018",
+    "name": "Kevin Turner",
+    "department": "Legal",
+    "role": "Legal Counsel",
+    "email": "k.turner@example.com",
+    "salary": 135000,
+    "clearance_level": "Tier 4"
+  },
+  {
+    "employee_id": "EMP-019",
+    "name": "Olivia Carter",
+    "department": "Product",
+    "role": "Product Designer",
+    "email": "o.carter@example.com",
+    "salary": 90000,
+    "clearance_level": "Tier 2"
+  },
+  {
+    "employee_id": "EMP-020",
+    "name": "William Parker",
+    "department": "Engineering",
+    "role": "Engineering Manager",
+    "email": "w.parker@example.com",
+    "salary": 155000,
+    "clearance_level": "Tier 4"
   }
 ]

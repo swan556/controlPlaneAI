@@ -113,8 +113,11 @@ elif mode == "Testing Mode (Side-by-Side)":
             st.subheader("ControlPlane Evaluated")
             cp_container = st.empty()
 
+        st.markdown("---")
+        action_container = st.empty()
+
         # Single stream reader parsing JSON lines for exact synchronized evaluation
-        def stream_dual(endpoint, final_prompt, raw_cnt, cp_cnt):
+        def stream_dual(endpoint, final_prompt, raw_cnt, cp_cnt, action_cnt):
             try:
                 import json
                 resp = requests.post(endpoint, json={"prompt": final_prompt}, stream=True, timeout=10)
@@ -130,6 +133,16 @@ elif mode == "Testing Mode (Side-by-Side)":
                             if "cp" in data:
                                 cp_text += data["cp"]
                                 cp_cnt.markdown(cp_text + "▌")
+                            if "action" in data:
+                                action = data["action"]
+                                if action == "BLOCK":
+                                    action_cnt.error(f"🛑 **Action Taken: {action}** - Connection Severed")
+                                elif action == "EDIT":
+                                    action_cnt.warning(f"⚠️ **Action Taken: {action}** - Content Replaced with Factual Ground Truth")
+                                elif action == "FLAG":
+                                    action_cnt.warning(f"🚩 **Action Taken: {action}** - Logged for Human Review")
+                                else:
+                                    action_cnt.success(f"✅ **Action Taken: {action}** - Passed all checks")
                         except json.JSONDecodeError:
                             pass
                 raw_cnt.markdown(raw_text)
@@ -138,4 +151,4 @@ elif mode == "Testing Mode (Side-by-Side)":
                 raw_cnt.error(f"Stream Error: {str(e)}")
                 cp_cnt.error(f"Stream Error: {str(e)}")
 
-        stream_dual(f"{PROXY_API_URL}/stream-dual", actual_prompt, raw_container, cp_container)
+        stream_dual(f"{PROXY_API_URL}/stream-dual", actual_prompt, raw_container, cp_container, action_container)
