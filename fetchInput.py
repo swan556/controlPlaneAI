@@ -148,9 +148,8 @@ async def stream_with_controlplane(payload: PromptRequest):
                             cp_halted = True
                             break
                         elif action.verdict == ActionVerdict.EDIT:
+                            yield sentence_chunk + " "
                             yield action.correction_text
-                            cp_halted = True
-                            break
                         elif action.verdict == ActionVerdict.FLAG:
                             yield sentence_chunk + " "
                             yield f"\n\n⚠️ [ControlPlane Flag: {action.reason}]\n"
@@ -182,6 +181,7 @@ async def stream_with_controlplane(payload: PromptRequest):
                 if action.verdict == ActionVerdict.BLOCK:
                     yield f"\n\n⚠️ [ControlPlane Alert: {action.reason}]\n"
                 elif action.verdict == ActionVerdict.EDIT:
+                    yield current_sentence + " "
                     yield action.correction_text
                 elif action.verdict == ActionVerdict.FLAG:
                     yield current_sentence
@@ -215,7 +215,7 @@ async def stream_dual_arena(payload: PromptRequest):
         # Phase 2: Check Session Blocklist immediately
         if session_manager.is_blocked(payload.session_id):
             log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Multi-turn Aggregator)", 1.0, "SessionAggregator")
-            yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Connection severed. Cumulative session risk threshold exceeded.]\n"}) + "\n"
+            yield json.dumps({"cp": "\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> *Connection severed: Cumulative session threat threshold exceeded (Multi-turn Salami-Slicing Mitigated).*  \n", "action": "BLOCK"}) + "\n"
             return
 
         # Pre-flight scan
@@ -226,7 +226,7 @@ async def stream_dual_arena(payload: PromptRequest):
                 prompt_halted = True
                 session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
                 log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
-                yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"}) + "\n"
+                yield json.dumps({"cp": "\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> *Prompt contains direct prompt injection or sensitive data probes.*  \n", "action": "BLOCK"}) + "\n"
 
         try:
             stream_response = await client.agents.stream_async(
@@ -284,15 +284,14 @@ async def stream_dual_arena(payload: PromptRequest):
                             session_manager.add_risk(payload.session_id, action.risk_score_to_add)
 
                             if action.verdict == ActionVerdict.BLOCK:
-                                yield json.dumps({"cp": f"\n\n⚠️ [ControlPlane Alert: {action.reason}]\n", "action": action.verdict.value}) + "\n"
+                                yield json.dumps({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value}) + "\n"
                                 cp_halted = True
                             elif action.verdict == ActionVerdict.EDIT:
-                                yield json.dumps({"cp": action.correction_text, "action": action.verdict.value}) + "\n"
-                                cp_halted = True
-                            elif action.verdict == ActionVerdict.FLAG:
-                                # Flag lets the stream continue, but appends a watermark
                                 yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
-                                yield json.dumps({"cp": f"\n\n⚠️ [ControlPlane Flag: {action.reason}]\n", "action": action.verdict.value}) + "\n"
+                                yield json.dumps({"cp": action.correction_text, "action": action.verdict.value}) + "\n"
+                            elif action.verdict == ActionVerdict.FLAG:
+                                yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
+                                yield json.dumps({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value}) + "\n"
                             else:
                                 yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
 
@@ -319,12 +318,13 @@ async def stream_dual_arena(payload: PromptRequest):
                 session_manager.add_risk(payload.session_id, action.risk_score_to_add)
 
                 if action.verdict == ActionVerdict.BLOCK:
-                    yield json.dumps({"cp": f"\n\n⚠️ [ControlPlane Alert: {action.reason}]\n", "action": action.verdict.value}) + "\n"
+                    yield json.dumps({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value}) + "\n"
                 elif action.verdict == ActionVerdict.EDIT:
+                    yield json.dumps({"cp": current_sentence + " "}) + "\n"
                     yield json.dumps({"cp": action.correction_text, "action": action.verdict.value}) + "\n"
                 elif action.verdict == ActionVerdict.FLAG:
                     yield json.dumps({"cp": current_sentence}) + "\n"
-                    yield json.dumps({"cp": f"\n\n⚠️ [ControlPlane Flag: {action.reason}]\n", "action": action.verdict.value}) + "\n"
+                    yield json.dumps({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value}) + "\n"
                 else:
                     yield json.dumps({"cp": current_sentence, "action": action.verdict.value}) + "\n"
             

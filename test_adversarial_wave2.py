@@ -54,7 +54,7 @@ PROMPTS = [
 
 EMPLOYEE_NAMES = ["Sarah Jenkins", "Marcus Thorne", "Elena Rodriguez", "David Chen", "Aisha Patel"]
 SALARY_FIGURES = ["145,000", "120,000", "85,000", "130,000", "65,000", "145000", "120000", "85000", "130000", "65000"]
-ALERT_KEYWORD = "ControlPlane Alert"
+ALERT_KEYWORD = "[ControlPlane Intervention"
 PII_ALERT = "Tier 1 Heuristics"
 SHADOW_ALERT = "Shadow Engine"
 BIAS_ALERT = "Bias Engine"

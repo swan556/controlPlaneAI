@@ -7,7 +7,7 @@ import json
 import time
 import sys
 
-ENDPOINT = "http://127.0.0.1:8005/stream-dual"
+ENDPOINT = "http://127.0.0.1:8000/stream-dual"
 
 PROMPTS = [
     (
@@ -66,7 +66,7 @@ LEAK_INDICATORS = [
     "s a r a h", "j e n k i n s", "m a r c u s", "d a v i d", "c h e n"
 ]
 
-ALERT_KEYWORD = "ControlPlane Alert"
+ALERT_KEYWORD = "[ControlPlane Intervention"
 
 results = []
 

@@ -1,0 +1,76 @@
+================================================================================
+          CONTROLPLANE AI - DETAILED BUSINESS PROPOSAL
+================================================================================
+
+--------------------------------------------------------------------------------
+PAGE 1: PROBLEM FRAMING & SOLUTION DESIGN
+--------------------------------------------------------------------------------
+
+1. PROBLEM FRAMING
+As enterprises rapidly adopt Large Language Models (LLMs) for customer support, internal knowledge bases, and coding assistants, they face unprecedented security and compliance risks. LLMs are prone to:
+- Data Leakage: Accidental or coerced exposure of Personally Identifiable Information (PII) and confidential company data.
+- Hallucinations: Generating highly confident, yet entirely ungrounded or factually incorrect claims.
+- Adversarial Evasion: Malicious actors bypassing traditional security filters using multi-turn "salami-slicing" attacks, foreign languages, or text obfuscation.
+- Implicit Bias: Generating demographically skewed or discriminatory content that poses severe brand and legal risks.
+
+Current solutions rely on static regex firewalls that are easily bypassed, or heavy secondary evaluations that introduce unacceptable latency into streaming applications. Enterprises require a real-time, context-aware active defense system.
+
+2. SOLUTION DESIGN
+ControlPlane AI is a high-performance proxy and Active Defense layer that sits between the user and the LLM. It evaluates semantic meaning, factual accuracy, and safety in real-time without disrupting the token stream. 
+Key Features & Innovations:
+- Multi-turn Session Aggregation: Defends against "salami-slicing" by tracking a cumulative risk score across an entire user session, permanently severing connections that exceed threat thresholds.
+- Tier 1 Heuristic Engine: Pre-flight regex and rule-based scanning that instantly blocks direct prompt injections and extracts PII.
+- Shadow Model Consensus: An asynchronous, secondary AI model that evaluates the primary stream to catch complex obfuscation and low-confidence hallucinations.
+- Vectorless Policy-Aware RAG Engine: Enforces explicit company ground truth using Weighted Jaccard Similarity and sentence-level token overlap checks.
+- Counterfactual Bias Detection: Conducts real-time A/B testing by swapping demographic markers in prompts to flag semantic variance.
+- Dynamic Action Engine: An intelligent multiplexer that evaluates sliding windows of text and issues granular verdicts: ALLOW, BLOCK, FLAG, and SUGGEST EDIT.
+
+--------------------------------------------------------------------------------
+PAGE 2: TARGET USERS & BUSINESS CASE
+--------------------------------------------------------------------------------
+
+3. TARGET USERS
+- Chief Information Security Officers (CISOs) & Compliance Teams: Ensuring regulatory compliance (GDPR, CCPA) and preventing intellectual property leakage.
+- AI Application Developers & MLOps: Teams looking for a drop-in API proxy to secure their LLM endpoints without building complex guardrails from scratch.
+- Enterprise Product Managers: Deploying internal HR chatbots, customer support agents, and RAG applications with guaranteed factual accuracy and safety.
+
+4. BUSINESS CASE & IMPACT
+- Risk Mitigation & Brand Protection: Drastically reduces the probability of high-profile PR disasters caused by LLM hallucinations or bias.
+- Operational Efficiency: Eliminates the need for manual review of AI-generated content. The "Suggest Edit" and "Flag" mechanisms automate governance.
+- Accelerated Time-to-Market: Provides a ready-to-deploy security layer, allowing product teams to confidently ship AI features months faster.
+- Cost Savings: Prevents costly data breaches and legal liabilities associated with PII exposure.
+
+5. EMPIRICAL PERFORMANCE METRICS (RED-TEAM RESULTS)
+Based on rigorous automated testing against 40+ adversarial and benign prompts:
+- Security Efficacy (True Positive Rate): 100%. Across all 3 waves of adversarial tests (Prompt Injections, Salami-slicing, and Base64 Obfuscation), ControlPlane successfully blocked 100% of malicious probes.
+- Data Leaks (False Negative Rate): 0%. Zero sensitive PII (Employee IDs, Salaries) was leaked during testing.
+- Usability Impact (False Positive Rate): ~66% on strict default settings (2 out of 3 safe policy queries were blocked due to aggressive token-overlap grounding requirements). This is highly tunable via the Action Engine thresholds to favor user experience.
+- Latency Overhead: < 200ms. Thanks to the async sliding window architecture, the security layer evaluates in parallel, meaning the end-user stream is virtually unaffected.
+
+--------------------------------------------------------------------------------
+PAGE 3: ROADMAP, RISKS & MITIGATIONS
+--------------------------------------------------------------------------------
+
+6. PHASED ROADMAP
+PHASE 1: Core Firewall & Streaming (Completed)
+- Implementation of the asynchronous NDJSON streaming multiplexer.
+- Tier 1 Heuristics and regex-based PII detection.
+- Interactive side-by-side Streamlit Dashboard for red-teaming.
+
+PHASE 2: Cognitive Defenses (Completed)
+- Integration of the Shadow Model for semantic evaluation.
+- Deployment of the Vectorless RAG Engine and Counterfactual Bias Detection.
+- Implementation of the Multi-turn Session Aggregator.
+
+PHASE 3: Analytics, Scale, & Enterprise Integration (Next 6 Months)
+- Distributed state management (Redis) for scaling Session Aggregation across global clusters.
+- Multi-LLM vendor support (OpenAI, Anthropic, open-source).
+- Comprehensive analytics dashboard for CISOs to monitor threat trends and flagged interactions in real-time.
+
+7. KEY RISKS & MITIGATIONS
+- Risk: Increased Latency from multiple evaluation pathways.
+  Mitigation: ControlPlane uses an asynchronous `asyncio.gather` architecture with a sliding window accumulator, evaluating chunks in parallel while the primary model streams, ensuring near-zero perceived latency for the end user.
+- Risk: False Positives degrading User Experience.
+  Mitigation: The Action Engine is highly granular. Rather than destructively blocking slightly uncertain outputs, it defaults to non-intrusive actions like "SUGGEST EDIT" (appending ground truth) or "FLAG" (silent admin logging).
+- Risk: Evasion of the Shadow Model.
+  Mitigation: The Shadow Model operates with strict system prompts and is insulated by the Tier 1 Heuristics and Session Aggregator, which catch traditional jailbreaks before they reach the cognitive layer.

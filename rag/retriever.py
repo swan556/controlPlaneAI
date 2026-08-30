@@ -75,18 +75,32 @@ _AFFIRMATIVE_SIGNALS = [
 # Synonym expansion: maps common LLM response words back to policy vocabulary.
 # Used in prohibition matching so 'help' counts as evidence of 'support/offer',
 # 'device' counts as 'router/modem', third-party brand names count as 'third-party'.
-_SYNONYM_EXPANSIONS: dict = {
+_SYNONYM_EXPANSIONS = {
+    # return / refund synonyms
+    "return":         ["refund", "refunds", "returns", "returned", "money", "cancellation"],
+    "returns":        ["refund", "refunds", "return", "returned", "money"],
+    "refund":         ["refunds", "return", "returns", "returned", "money", "prorated"],
+    "refunds":        ["refund", "return", "returns", "returned", "money", "prorated"],
+    "cancel":         ["cancellation", "cancelling", "cancelled", "subscription", "downgrade"],
+    "cancellation":   ["cancel", "cancelling", "cancelled", "subscription", "downgrade"],
+    "pricing":        ["price", "cost", "plan", "plans", "subscription", "starter", "business", "enterprise", "billing", "bill"],
+    "price":          ["pricing", "cost", "plan", "plans", "subscription", "starter", "business", "enterprise", "billing", "bill"],
+    "cost":           ["pricing", "price", "plan", "plans", "subscription", "starter", "business", "enterprise", "billing", "bill"],
+    "plan":           ["plans", "subscription", "starter", "business", "enterprise", "pricing", "tier"],
+    "plans":          ["plan", "subscription", "starter", "business", "enterprise", "pricing", "tier"],
+    "trial":          ["trials", "free", "business"],
     # support / offer synonyms
-    "help":           ["support", "offer", "assist"],
-    "assist":         ["support", "offer"],
+    "help":           ["support", "offer", "assist", "guide"],
+    "assist":         ["support", "offer", "help"],
     "fix":            ["troubleshoot", "support"],
     "resolve":        ["troubleshoot", "support"],
     "reset":          ["troubleshoot"],
     "guide":          ["support"],
     "walk":           ["support"],
     # device / hardware synonyms
-    "device":         ["router", "modem"],
-    "router":         ["routers"],
+    "device":         ["router", "modem", "hardware", "equipment"],
+    "router":         ["routers", "modem"],
+    "hardware":       ["equipment", "edge", "router"],
     "netgear":        ["third", "party", "routers"],
     "asus":           ["third", "party", "routers"],
     "tp-link":        ["third", "party", "routers"],
@@ -94,12 +108,12 @@ _SYNONYM_EXPANSIONS: dict = {
     "dlink":          ["third", "party", "routers"],
     "amazon":         ["third", "party"],
     # data / privacy synonyms
-    "salary":         ["compensation", "salary"],
-    "pay":            ["salary", "compensation"],
-    "wage":           ["salary", "compensation"],
-    "share":          ["disclose", "shared", "disclose"],
-    "tell":           ["disclose", "shared"],
-    "reveal":         ["disclose", "shared"],
+    "salary":         ["compensation", "salary", "pay", "wage"],
+    "pay":            ["salary", "compensation", "wage"],
+    "wage":           ["salary", "compensation", "pay"],
+    "share":          ["disclose", "shared", "reveal"],
+    "tell":           ["disclose", "shared", "reveal"],
+    "reveal":         ["disclose", "shared", "tell"],
     "give":           ["provide", "shared"],
     "wifi":           ["wi-fi", "public"],
     "wireless":       ["wi-fi"],
@@ -118,8 +132,8 @@ _SYNONYM_EXPANSIONS: dict = {
     "new":            ["upcoming", "unannounced"],
     "announce":       ["disclose", "upcoming"],
     "announcing":     ["disclose", "upcoming"],
-    "feature":        ["features", "unannounced"],
-    "product":        ["features", "unannounced"],
+    "feature":        ["features", "unannounced", "capabilities"],
+    "product":        ["features", "unannounced", "cloud", "edge", "monitor", "api", "backup"],
 }
 
 
@@ -214,11 +228,16 @@ class RAGRetriever:
                 continue
 
             prohibitions = self._extract_prohibitions(body)
+            full_section_text = f"## {title}\n{body}"
+            title_tokens = set(_tokenize(title)) - _STOPWORDS
+            body_tokens = set(_tokenize(body)) - _STOPWORDS
 
             self.policy_sections.append({
                 "title": title,
-                "content": body,
-                "tokens": set(_tokenize(body)),
+                "content": full_section_text,
+                "title_tokens": title_tokens,
+                "body_tokens": body_tokens,
+                "tokens": title_tokens | body_tokens,
                 "prohibitions": prohibitions,
             })
 
@@ -241,24 +260,42 @@ class RAGRetriever:
 
     def retrieve(self, query: str, top_k: int = 3) -> List[str]:
         """
-        Retrieve top-K relevant context strings for a query.
-        Searches both policy sections and general documents.
+        Retrieve top-K relevant context strings for a query using relevance-weighted term matching.
         """
-        query_tokens = set(_tokenize(query))
-        if not query_tokens:
+        query_raw_tokens = set(_tokenize(query))
+        query_key = query_raw_tokens - _STOPWORDS
+        if not query_key:
+            query_key = query_raw_tokens
+        if not query_key:
             return []
+
+        expanded_query: set = set(query_key)
+        for t in query_key:
+            if t in _SYNONYM_EXPANSIONS:
+                expanded_query.update(_SYNONYM_EXPANSIONS[t])
 
         scored: List[Tuple[float, str]] = []
 
         for sec in self.policy_sections:
-            score = _jaccard(query_tokens, sec["tokens"])
+            title_matches = len(expanded_query & sec.get("title_tokens", set()))
+            body_matches = len(expanded_query & sec.get("body_tokens", sec["tokens"]))
+            
+            # Stem / prefix matches
+            stem_matches = 0
+            for qt in expanded_query:
+                if len(qt) >= 4:
+                    if any(st.startswith(qt[:4]) for st in sec["tokens"]):
+                        stem_matches += 0.5
+
+            score = (title_matches * 3.5) + body_matches + stem_matches
             if score > 0:
                 scored.append((score, sec["content"]))
 
         for doc in self.documents:
-            score = _jaccard(query_tokens, doc["tokens"])
-            if score > 0:
-                scored.append((score, doc["content"]))
+            doc_tokens = doc["tokens"] - _STOPWORDS
+            matches = len(expanded_query & doc_tokens)
+            if matches > 0:
+                scored.append((float(matches), doc["content"]))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [content for _, content in scored[:top_k]]
@@ -266,17 +303,34 @@ class RAGRetriever:
     def _retrieve_sections_with_scores(
         self, query: str, top_k: int = 3
     ) -> List[Tuple[float, Dict[str, Any]]]:
-        """Internal: return (jaccard_score, section_dict) pairs for policy sections."""
-        query_tokens = set(_tokenize(query))
-        if not query_tokens or not self.policy_sections:
+        """Internal: return (score, section_dict) pairs for policy sections."""
+        query_raw_tokens = set(_tokenize(query))
+        query_key = query_raw_tokens - _STOPWORDS
+        if not query_key:
+            query_key = query_raw_tokens
+        if not query_key:
             return []
 
-        scored = [
-            (_jaccard(query_tokens, sec["tokens"]), sec)
-            for sec in self.policy_sections
-        ]
+        expanded_query: set = set(query_key)
+        for t in query_key:
+            if t in _SYNONYM_EXPANSIONS:
+                expanded_query.update(_SYNONYM_EXPANSIONS[t])
+
+        scored = []
+        for sec in self.policy_sections:
+            title_matches = len(expanded_query & sec.get("title_tokens", set()))
+            body_matches = len(expanded_query & sec.get("body_tokens", sec["tokens"]))
+            stem_matches = 0
+            for qt in expanded_query:
+                if len(qt) >= 4:
+                    if any(st.startswith(qt[:4]) for st in sec["tokens"]):
+                        stem_matches += 0.5
+            score = (title_matches * 3.5) + body_matches + stem_matches
+            if score > 0:
+                scored.append((score, sec))
+
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [(s, sec) for s, sec in scored[:top_k] if s > 0.0]
+        return scored[:top_k]
 
     # ------------------------------------------------------------------
     # Policy violation detection
