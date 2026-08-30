@@ -40,7 +40,7 @@ class HeuristicDetector:
         # Employee ID in any common format: EMP001, EMP-4821, E-12345, ID: EMP..., Employee ID: ...
         "EMPLOYEE_ID": (
             r'\b(employee\s*(?:id|number|no|#)\s*[:=]?\s*[A-Z0-9\-]{2,12})'
-            r'|\b(emp[-]?[A-Z0-9]{2,10})\b'
+            r'|\b(emp[-]?\d+[A-Z0-9]{0,6})\b'
             r'|\b([Ee]-\d{3,8})\b'
         ),
 
@@ -105,7 +105,8 @@ class HeuristicDetector:
             r'\bdan\s+mode\b',
             r'evil\s+twin\s+persona',
             r'act\s+as\s+an?\s+unrestricted\s+ai',
-            r'bypass\s+ethical\s+guidelines'
+            r'bypass\s+ethical\s+guidelines',
+            r'^sudo\b'
         ],
         "DELIMITER_HIJACK": [
             r'```system\s*[\s\S]*?```',
@@ -117,6 +118,22 @@ class HeuristicDetector:
 
     def __init__(self):
         self.compiled_pii = {key: re.compile(pat, re.IGNORECASE) for key, pat in self.PII_PATTERNS.items()}
+        
+        # Exact Data Match (EDM) for internal employee names
+        import json
+        import os
+        try:
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            emp_path = os.path.join(base_dir, 'employees.json')
+            with open(emp_path, 'r') as f:
+                employees = json.load(f)
+                names = [re.escape(emp['name']) for emp in employees if 'name' in emp]
+                if names:
+                    edm_pattern = r'\b(?:' + '|'.join(names) + r')\b'
+                    self.compiled_pii["INTERNAL_EMPLOYEE_NAME"] = re.compile(edm_pattern, re.IGNORECASE)
+        except Exception as e:
+            pass # Fallback gracefully if database missing
+
         self.compiled_injections = {}
         for category, patterns in self.INJECTION_PATTERNS.items():
             combined = "|".join(f"(?:{p})" for p in patterns)

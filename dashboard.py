@@ -113,30 +113,29 @@ elif mode == "Testing Mode (Side-by-Side)":
             st.subheader("ControlPlane Evaluated")
             cp_container = st.empty()
 
-        # Thread-safe streamer function
-        def stream_to_container(endpoint, final_prompt, container, prefix=""):
+        # Single stream reader parsing JSON lines for exact synchronized evaluation
+        def stream_dual(endpoint, final_prompt, raw_cnt, cp_cnt):
             try:
+                import json
                 resp = requests.post(endpoint, json={"prompt": final_prompt}, stream=True, timeout=10)
-                text = prefix
-                for chunk in resp.iter_content(chunk_size=1024):
-                    if chunk:
-                        text += chunk.decode('utf-8')
-                        container.markdown(text + "▌") # Cursor effect
-                container.markdown(text) # Final render without cursor
+                raw_text = ""
+                cp_text = ""
+                for line in resp.iter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line.decode('utf-8'))
+                            if "raw" in data:
+                                raw_text += data["raw"]
+                                raw_cnt.markdown(raw_text + "▌")
+                            if "cp" in data:
+                                cp_text += data["cp"]
+                                cp_cnt.markdown(cp_text + "▌")
+                        except json.JSONDecodeError:
+                            pass
+                raw_cnt.markdown(raw_text)
+                cp_cnt.markdown(cp_text)
             except Exception as e:
-                container.error(f"Stream Error: {str(e)}")
+                raw_cnt.error(f"Stream Error: {str(e)}")
+                cp_cnt.error(f"Stream Error: {str(e)}")
 
-        # Create threads for simultaneous streaming
-        raw_thread = threading.Thread(target=stream_to_container, args=(f"{PROXY_API_URL}/stream-raw", actual_prompt, raw_container))
-        cp_thread = threading.Thread(target=stream_to_container, args=(f"{PROXY_API_URL}/stream-check", actual_prompt, cp_container))
-
-        # Attach Streamlit script context so threads can interact with st elements
-        add_script_run_ctx(raw_thread)
-        add_script_run_ctx(cp_thread)
-
-        raw_thread.start()
-        cp_thread.start()
-
-        # Wait for both to finish before unlocking the UI
-        raw_thread.join()
-        cp_thread.join()
+        stream_dual(f"{PROXY_API_URL}/stream-dual", actual_prompt, raw_container, cp_container)

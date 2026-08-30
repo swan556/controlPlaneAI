@@ -28,16 +28,14 @@ company_policies = ""
 if os.path.exists(mock_policies_path):
     with open(mock_policies_path, "r") as f:
         company_policies = f.read()
-        rag_retriever.add_documents([company_policies])
+        rag_retriever.add_policy_document(company_policies)
 
 class PromptRequest(BaseModel):
     prompt: str
 
-# Helper to run synchronous RAG check in thread
-def run_rag_check(text: str) -> bool:
-    contexts = rag_retriever.retrieve(text)
-    context_str = " ".join(contexts) if contexts else ""
-    result = rag_retriever.check_grounding(context_str, text)
+# Helper to run synchronous policy compliance check in a thread
+def run_rag_check(prompt: str, text: str) -> bool:
+    result = rag_retriever.check_policy_compliance(prompt=prompt, response=text)
     return result.is_grounded
 
 # --- 1. Raw Streaming Endpoint (Mistral Only) ---
@@ -68,6 +66,13 @@ async def stream_raw(payload: PromptRequest):
 async def stream_with_controlplane(payload: PromptRequest):
     if not os.getenv("MISTRAL_API_KEY"):
         raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
+
+    # 0. PRE-FLIGHT SCAN (User Query Check)
+    preflight = heuristic_detector.scan(payload.prompt)
+    if preflight.has_pii or preflight.has_prompt_injection:
+        async def early_halt():
+            yield "\n\n⚠️ [ControlPlane Alert: Request halted by Tier 1 Heuristics (PII/Injection found in prompt)]\n"
+        return StreamingResponse(early_halt(), media_type="text/event-stream")
 
     async def token_stream_generator():
         try:
@@ -102,7 +107,7 @@ async def stream_with_controlplane(payload: PromptRequest):
                         # Execute pathways concurrently
                         shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
                         heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
-                        rag_task = asyncio.to_thread(run_rag_check, sentence_to_check)
+                        rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
                         bias_task = bias_detector.evaluate_bias_async(payload.prompt, sentence_to_check)
 
                         results = await asyncio.gather(shadow_task, heuristic_task, rag_task, bias_task, return_exceptions=True)
@@ -140,7 +145,7 @@ async def stream_with_controlplane(payload: PromptRequest):
                 sentence_to_check = current_sentence.strip()
                 shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
                 heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
-                rag_task = asyncio.to_thread(run_rag_check, sentence_to_check)
+                rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
                 bias_task = bias_detector.evaluate_bias_async(payload.prompt, sentence_to_check)
 
                 results = await asyncio.gather(shadow_task, heuristic_task, rag_task, bias_task, return_exceptions=True)
@@ -158,6 +163,104 @@ async def stream_with_controlplane(payload: PromptRequest):
             yield f"\n[Stream Error: {str(e)}]"
 
     return StreamingResponse(token_stream_generator(), media_type="text/event-stream")
+
+# --- 3. Dual-Stream Multiplexed Endpoint (Testing Mode) ---
+@router.post("/stream-dual")
+async def stream_dual_arena(payload: PromptRequest):
+    """
+    Makes ONE call to Mistral and multiplexes the output into JSON lines:
+    {"raw": "token"} and {"cp": "evaluated sentence"}.
+    This guarantees both sides of the UI are judging the EXACT same generation!
+    """
+    import json
+    if not os.getenv("MISTRAL_API_KEY"):
+        raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
+
+    async def token_stream_generator():
+        # Pre-flight scan
+        preflight = heuristic_detector.scan(payload.prompt)
+        prompt_halted = False
+        if preflight.has_pii or preflight.has_prompt_injection:
+            prompt_halted = True
+            # In production we would halt immediately to save compute.
+            # But in the Testing Arena, we want to let Mistral run so the user can 
+            # visually see the raw vulnerability on the left, while the right is blocked.
+            yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"}) + "\n"
+
+        try:
+            stream_response = await client.agents.stream_async(
+                agent_id="ag_01a048474f7872db90a903ea31477b48",
+                messages=[{"role": "user", "content": payload.prompt}]
+            )
+
+            current_sentence = ""
+            cp_halted = prompt_halted  # If prompt was halted, CP is already halted
+
+            async for chunk in stream_response:
+                token = chunk.data.choices[0].delta.content
+                if token:
+                    # ALWAYS stream the raw token
+                    yield json.dumps({"raw": token}) + "\n"
+
+                    # Only process ControlPlane logic if not already halted
+                    if not cp_halted:
+                        current_sentence += token
+                        import re
+                        sentences = re.split(r'(?<=[.!?])\s+', current_sentence)
+                        
+                        if len(sentences) > 1 or len(current_sentence.split()) >= 30:
+                            sentence_to_check = sentences[0].strip() if len(sentences) > 1 else current_sentence.strip()
+                            if not sentence_to_check:
+                                current_sentence = ""
+                                continue
+                                
+                            current_sentence = " ".join(sentences[1:]) if len(sentences) > 1 else ""
+
+                            shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
+                            heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
+                            rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
+                            bias_task = bias_detector.evaluate_bias_async(payload.prompt, sentence_to_check)
+
+                            results = await asyncio.gather(shadow_task, heuristic_task, rag_task, bias_task, return_exceptions=True)
+                            shadow_res, heuristic_res, rag_res, bias_res = results
+
+                            if isinstance(heuristic_res, Exception) or getattr(heuristic_res, "has_pii", False) or getattr(heuristic_res, "has_prompt_injection", False):
+                                yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by Tier 1 Heuristics (PII/Injection)]\n"}) + "\n"
+                                cp_halted = True
+                            elif isinstance(shadow_res, Exception) or getattr(shadow_res, "is_uncertain", False):
+                                yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by Shadow Engine (Overconfidence/Hallucination)]\n"}) + "\n"
+                                cp_halted = True
+                            elif isinstance(bias_res, Exception) or getattr(bias_res, "bias_detected", False):
+                                yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by Bias Engine (Counterfactual Variance High)]\n"}) + "\n"
+                                cp_halted = True
+                            elif isinstance(rag_res, Exception) or not rag_res:
+                                yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by RAG Engine (Response contradicts policy)]\n"}) + "\n"
+                                cp_halted = True
+                            else:
+                                yield json.dumps({"cp": sentence_to_check + " "}) + "\n"
+
+            # Final chunk
+            if current_sentence.strip() and not cp_halted:
+                sentence_to_check = current_sentence.strip()
+                shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
+                heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
+                rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
+                bias_task = bias_detector.evaluate_bias_async(payload.prompt, sentence_to_check)
+                results = await asyncio.gather(shadow_task, heuristic_task, rag_task, bias_task, return_exceptions=True)
+                shadow_res, heuristic_res, rag_res, bias_res = results
+                
+                if (isinstance(heuristic_res, Exception) or getattr(heuristic_res, "has_pii", False) or getattr(heuristic_res, "has_prompt_injection", False) or 
+                    isinstance(shadow_res, Exception) or getattr(shadow_res, "is_uncertain", False) or 
+                    isinstance(bias_res, Exception) or getattr(bias_res, "bias_detected", False) or
+                    isinstance(rag_res, Exception) or not rag_res):
+                    yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Final chunk halted due to policy violation]\n"}) + "\n"
+                else:
+                    yield json.dumps({"cp": current_sentence}) + "\n"
+
+        except Exception as e:
+            yield json.dumps({"raw": f"\n[Error: {str(e)}]", "cp": f"\n[Error: {str(e)}]"}) + "\n"
+
+    return StreamingResponse(token_stream_generator(), media_type="application/x-ndjson")
 
 
 # --- 2. Complete Response Endpoint ---
