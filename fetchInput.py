@@ -11,6 +11,8 @@ from shadow.shadow_engine import ShadowEngine
 from detection.heuristics import HeuristicDetector
 from detection.bias import CounterfactualBiasDetector
 from rag.retriever import RAGRetriever
+from detection.session import session_manager
+from database import log_incident
 
 load_dotenv()
 
@@ -32,6 +34,7 @@ if os.path.exists(mock_policies_path):
 
 class PromptRequest(BaseModel):
     prompt: str
+    session_id: str = "default-session"
 
 # Helper to run synchronous policy compliance check in a thread
 def run_rag_check(prompt: str, text: str) -> bool:
@@ -178,15 +181,20 @@ async def stream_dual_arena(payload: PromptRequest):
         raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
 
     async def token_stream_generator():
+        # Phase 2: Check Session Blocklist immediately
+        if session_manager.is_blocked(payload.session_id):
+            log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Multi-turn Aggregator)", 1.0, "SessionAggregator")
+            yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Connection severed. Cumulative session risk threshold exceeded.]\n"}) + "\n"
+            return
+
         # Pre-flight scan
         prompt_halted = False
         if not payload.prompt.lstrip().lower().startswith("sudo"):
             preflight = heuristic_detector.scan(payload.prompt)
             if preflight.has_pii or preflight.has_prompt_injection:
                 prompt_halted = True
-                # In production we would halt immediately to save compute.
-                # But in the Testing Arena, we want to let Mistral run so the user can 
-                # visually see the raw vulnerability on the left, while the right is blocked.
+                session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
+                log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
                 yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"}) + "\n"
 
         try:
@@ -196,6 +204,7 @@ async def stream_dual_arena(payload: PromptRequest):
             )
 
             current_sentence = ""
+            previous_tail = ""
             cp_halted = prompt_halted  # If prompt was halted, CP is already halted
 
             async for chunk in stream_response:
@@ -211,12 +220,17 @@ async def stream_dual_arena(payload: PromptRequest):
                         sentences = re.split(r'(?<=[.!?])\s+', current_sentence)
                         
                         if len(sentences) > 1 or len(current_sentence.split()) >= 30:
-                            sentence_to_check = sentences[0].strip() if len(sentences) > 1 else current_sentence.strip()
-                            if not sentence_to_check:
+                            sentence_chunk = sentences[0].strip() if len(sentences) > 1 else current_sentence.strip()
+                            if not sentence_chunk:
                                 current_sentence = ""
                                 continue
                                 
                             current_sentence = " ".join(sentences[1:]) if len(sentences) > 1 else ""
+
+                            # Sliding Window Accumulator: prepend tail of previous chunk
+                            sentence_to_check = (previous_tail + " " + sentence_chunk).strip()
+                            # Update previous_tail with the last 10 words of the current chunk
+                            previous_tail = " ".join(sentence_chunk.split()[-10:])
 
                             shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
                             heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
@@ -227,6 +241,7 @@ async def stream_dual_arena(payload: PromptRequest):
                             shadow_res, heuristic_res, rag_res, bias_res = results
 
                             if isinstance(heuristic_res, Exception) or getattr(heuristic_res, "has_pii", False) or getattr(heuristic_res, "has_prompt_injection", False):
+                                session_manager.add_risk(payload.session_id, 0.5)
                                 yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by Tier 1 Heuristics (PII/Injection)]\n"}) + "\n"
                                 cp_halted = True
                             elif isinstance(shadow_res, Exception) or getattr(shadow_res, "is_uncertain", False):
@@ -236,14 +251,17 @@ async def stream_dual_arena(payload: PromptRequest):
                                 yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by Bias Engine (Counterfactual Variance High)]\n"}) + "\n"
                                 cp_halted = True
                             elif isinstance(rag_res, Exception) or not rag_res:
+                                session_manager.add_risk(payload.session_id, 0.4)
                                 yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Stream halted by RAG Engine (Response contradicts policy)]\n"}) + "\n"
                                 cp_halted = True
                             else:
-                                yield json.dumps({"cp": sentence_to_check + " "}) + "\n"
+                                # We only yield the new chunk to the user, not the overlapping tail!
+                                yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
 
             # Final chunk
             if current_sentence.strip() and not cp_halted:
-                sentence_to_check = current_sentence.strip()
+                sentence_chunk = current_sentence.strip()
+                sentence_to_check = (previous_tail + " " + sentence_chunk).strip()
                 shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
                 heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
                 rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
@@ -255,9 +273,15 @@ async def stream_dual_arena(payload: PromptRequest):
                     isinstance(shadow_res, Exception) or getattr(shadow_res, "is_uncertain", False) or 
                     isinstance(bias_res, Exception) or getattr(bias_res, "bias_detected", False) or
                     isinstance(rag_res, Exception) or not rag_res):
+                    session_manager.add_risk(payload.session_id, 0.5)
                     yield json.dumps({"cp": "\n\n⚠️ [ControlPlane Alert: Final chunk halted due to policy violation]\n"}) + "\n"
                 else:
                     yield json.dumps({"cp": current_sentence}) + "\n"
+            
+            # Phase 3: Log full generated text at the end of the stream
+            final_verdict = "BLOCKED" if cp_halted else "ALLOWED"
+            current_risk = session_manager.get_cumulative_risk(payload.session_id)
+            log_incident(payload.session_id, payload.prompt, current_sentence, final_verdict, current_risk, "StreamDualArena")
 
         except Exception as e:
             yield json.dumps({"raw": f"\n[Error: {str(e)}]", "cp": f"\n[Error: {str(e)}]"}) + "\n"
