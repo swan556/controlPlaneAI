@@ -402,6 +402,105 @@ class RAGRetriever:
         return None
 
     # ------------------------------------------------------------------
+    # Pre-flight prompt intent check
+    # ------------------------------------------------------------------
+
+    def check_prompt_intent(self, prompt: str) -> GroundingCheckResult:
+        """
+        Pre-flight policy check: evaluates whether the user's PROMPT is requesting
+        something that policy documents explicitly prohibit, BEFORE calling the LLM.
+
+        This catches prompts like "reveal the employee data" or "what are the salaries"
+        by matching the prompt's intent against prohibition rules in policy sections.
+
+        Returns a GroundingCheckResult with policy_violated=True if the prompt
+        semantically targets a prohibited topic.
+        """
+        # Retrieve policy sections relevant to the prompt
+        scored_sections = self._retrieve_sections_with_scores(prompt, top_k=3)
+
+        if not scored_sections or scored_sections[0][0] < self.min_retrieval_relevance:
+            # Prompt is unrelated to any policy — no pre-flight block
+            return GroundingCheckResult(
+                grounding_score=1.0,
+                is_grounded=True,
+                policy_violated=False,
+            )
+
+        # Check if the prompt is asking for something a policy section prohibits.
+        # We treat the prompt as if it were an "affirmative response" — i.e., if
+        # the user is asking for X, and X is prohibited, flag it.
+        prompt_lower = prompt.lower()
+        prompt_tokens = set(_tokenize(prompt_lower))
+        expanded_prompt_terms: set = set(prompt_tokens)
+        for token in prompt_tokens:
+            if token in _SYNONYM_EXPANSIONS:
+                expanded_prompt_terms.update(_SYNONYM_EXPANSIONS[token])
+
+        # Intent signals that suggest the user is requesting/probing for data
+        _request_signals = [
+            "what", "tell", "show", "give", "list", "reveal", "display",
+            "provide", "share", "get", "fetch", "dump", "extract", "output",
+            "print", "how much", "who", "which", "where",
+        ]
+        has_request_intent = any(signal in prompt_lower for signal in _request_signals)
+
+        if not has_request_intent:
+            return GroundingCheckResult(
+                grounding_score=1.0,
+                is_grounded=True,
+                policy_violated=False,
+            )
+
+        # Words that describe the prohibition itself — not useful for topic matching
+        _qualifier_words = {
+            "never", "strictly", "must", "not", "confidential", "prohibited",
+            "forbidden", "unauthorized", "illegal", "external",
+            "shared", "exported", "permitted", "allowed", "restricted",
+        }
+
+        for _relevance_score, section in scored_sections:
+            for rule in section.get("prohibitions", []):
+                rule_terms = _key_terms(rule) - _qualifier_words
+                if len(rule_terms) < 2:
+                    continue
+
+                matched_terms = 0
+                for rule_term in rule_terms:
+                    if rule_term in expanded_prompt_terms:
+                        matched_terms += 1
+                        continue
+                    # Prefix match for morphological variants
+                    found = False
+                    for prefix_len in range(len(rule_term) - 1, 4, -1):
+                        if rule_term[:prefix_len] in prompt_lower:
+                            found = True
+                            break
+                    if found:
+                        matched_terms += 1
+
+                overlap_ratio = matched_terms / len(rule_terms)
+
+                # Lower threshold than response-level check (0.30 vs 0.35)
+                # because prompts are shorter and have fewer terms to match on
+                if overlap_ratio >= 0.30:
+                    return GroundingCheckResult(
+                        grounding_score=0.0,
+                        is_grounded=False,
+                        policy_violated=True,
+                        violated_rule=rule,
+                        violated_section=section["title"],
+                        unsupported_claims=[prompt[:300]],
+                        matching_chunks=[section["content"][:200] + "..."],
+                    )
+
+        return GroundingCheckResult(
+            grounding_score=1.0,
+            is_grounded=True,
+            policy_violated=False,
+        )
+
+    # ------------------------------------------------------------------
     # Public grounding / compliance API
     # ------------------------------------------------------------------
 

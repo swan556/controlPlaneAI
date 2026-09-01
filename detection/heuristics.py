@@ -335,4 +335,3 @@ class HeuristicDetector:
             sanitized_text=text,
             tier1_risk_score=risk_score
         )
-

@@ -26,8 +26,8 @@ class SessionAggregator:
         return session.cumulative_risk
 
     def is_blocked(self, session_id: str) -> bool:
-        session = self._get_or_create_session(session_id)
-        return session.cumulative_risk >= self.risk_threshold
+        # User requested to disable strict session locking
+        return False
 
     def get_cumulative_risk(self, session_id: str) -> float:
         return self._get_or_create_session(session_id).cumulative_risk

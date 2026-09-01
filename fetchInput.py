@@ -40,9 +40,14 @@ if os.path.exists(product_desc_path):
         product_description = f.read()
         rag_retriever.add_policy_document(product_description)
 
+# Default agent IDs
+HALLUCINATING_AGENT_ID = "ag_01a048474f7872db90a903ea31477b48"
+GOOD_AGENT_ID = "ag_01a05e48d29a7723abdb5978b5d22dbd"
+
 class PromptRequest(BaseModel):
     prompt: str
     session_id: str = "default-session"
+    agent_id: str = HALLUCINATING_AGENT_ID  # Default to hallucinating agent for backward compat
 
 # Helper to run synchronous policy compliance check in a thread
 def run_rag_check(prompt: str, text: str) -> GroundingCheckResult:
@@ -86,17 +91,24 @@ async def stream_with_controlplane(payload: PromptRequest):
             return
 
         # Pre-flight scan
-        if not payload.prompt.lstrip().lower().startswith("sudo"):
-            preflight = heuristic_detector.scan(payload.prompt)
-            if preflight.has_pii or preflight.has_prompt_injection:
-                session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
-                log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
-                yield "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"
-                return
+        preflight = heuristic_detector.scan(payload.prompt)
+        if preflight.has_pii or preflight.has_prompt_injection:
+            session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
+            log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
+            yield "\n\n⚠️ [ControlPlane Alert: Request halted (PII/Injection found in prompt)]\n"
+            return
+
+        # Pre-flight RAG policy intent check
+        rag_preflight = rag_retriever.check_prompt_intent(payload.prompt)
+        if rag_preflight.policy_violated:
+            session_manager.add_risk(payload.session_id, 0.4)
+            log_incident(payload.session_id, payload.prompt, "", "BLOCKED (RAG Preflight)", 0.4, "RAGRetriever")
+            yield f"\n\n⚠️ [ControlPlane Alert: Request halted — Policy violation detected: {rag_preflight.violated_rule}]\n"
+            return
 
         try:
             stream_response = await client.agents.stream_async(
-                agent_id="ag_01a048474f7872db90a903ea31477b48",
+                agent_id=payload.agent_id,
                 messages=[{"role": "user", "content": payload.prompt}]
             )
 
@@ -220,29 +232,55 @@ async def stream_dual_arena(payload: PromptRequest):
 
         # Pre-flight scan
         prompt_halted = False
-        if not payload.prompt.lstrip().lower().startswith("sudo"):
-            preflight = heuristic_detector.scan(payload.prompt)
-            if preflight.has_pii or preflight.has_prompt_injection:
+        preflight = heuristic_detector.scan(payload.prompt)
+        if preflight.has_pii or preflight.has_prompt_injection:
+            prompt_halted = True
+            session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
+            log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
+            yield json.dumps({"cp": "\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> *Prompt contains direct prompt injection or sensitive data probes.*  \n", "action": "BLOCK"}) + "\n"
+
+        # Pre-flight RAG policy intent check
+        if not prompt_halted:
+            rag_preflight = rag_retriever.check_prompt_intent(payload.prompt)
+            if rag_preflight.policy_violated:
                 prompt_halted = True
-                session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
-                log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
-                yield json.dumps({"cp": "\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> *Prompt contains direct prompt injection or sensitive data probes.*  \n", "action": "BLOCK"}) + "\n"
+                session_manager.add_risk(payload.session_id, 0.4)
+                log_incident(payload.session_id, payload.prompt, "", "BLOCKED (RAG Preflight)", 0.4, "RAGRetriever")
+                yield json.dumps({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Policy Violation:** {rag_preflight.violated_rule}  \n> *Prompt blocked at pre-flight before reaching LLM.*  \n", "action": "BLOCK"}) + "\n"
 
-        try:
-            stream_response = await client.agents.stream_async(
-                agent_id="ag_01a048474f7872db90a903ea31477b48",
-                messages=[{"role": "user", "content": payload.prompt}]
-            )
+        import asyncio
+        queue = asyncio.Queue()
 
-            current_sentence = ""
-            previous_tail = ""
-            cp_halted = prompt_halted  # If prompt was halted, CP is already halted
+        async def run_good_agent():
+            try:
+                res = await client.agents.stream_async(
+                    agent_id=GOOD_AGENT_ID,
+                    messages=[{"role": "user", "content": payload.prompt}]
+                )
+                async for chunk in res:
+                    token = chunk.data.choices[0].delta.content
+                    if token:
+                        await queue.put({"good": token})
+            except Exception as e:
+                await queue.put({"good": f"\n[Error: {str(e)}]"})
+            await queue.put({"good_done": True})
 
-            async for chunk in stream_response:
-                token = chunk.data.choices[0].delta.content
-                if token:
-                    # ALWAYS stream the raw token
-                    yield json.dumps({"raw": token}) + "\n"
+        async def run_bad_agent_with_cp():
+            try:
+                stream_response = await client.agents.stream_async(
+                    agent_id=HALLUCINATING_AGENT_ID,
+                    messages=[{"role": "user", "content": payload.prompt}]
+                )
+
+                current_sentence = ""
+                previous_tail = ""
+                cp_halted = prompt_halted  # If prompt was halted, CP is already halted
+
+                async for chunk in stream_response:
+                    token = chunk.data.choices[0].delta.content
+                    if token:
+                        # ALWAYS stream the raw token
+                        await queue.put({"raw": token})
 
                     # Only process ControlPlane logic if not already halted
                     if not cp_halted:
@@ -284,57 +322,74 @@ async def stream_dual_arena(payload: PromptRequest):
                             session_manager.add_risk(payload.session_id, action.risk_score_to_add)
 
                             if action.verdict == ActionVerdict.BLOCK:
-                                yield json.dumps({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value}) + "\n"
+                                await queue.put({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value})
                                 cp_halted = True
                             elif action.verdict == ActionVerdict.EDIT:
-                                yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
-                                yield json.dumps({"cp": action.correction_text, "action": action.verdict.value}) + "\n"
+                                await queue.put({"cp": sentence_chunk + " "})
+                                await queue.put({"cp": action.correction_text, "action": action.verdict.value})
                             elif action.verdict == ActionVerdict.FLAG:
-                                yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
-                                yield json.dumps({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value}) + "\n"
+                                await queue.put({"cp": sentence_chunk + " "})
+                                await queue.put({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value})
                             else:
-                                yield json.dumps({"cp": sentence_chunk + " "}) + "\n"
+                                await queue.put({"cp": sentence_chunk + " "})
 
-            # Final chunk
-            if current_sentence.strip() and not cp_halted:
-                sentence_chunk = current_sentence.strip()
-                sentence_to_check = (previous_tail + " " + sentence_chunk).strip()
-                shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
-                heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
-                rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
-                bias_task = bias_detector.evaluate_bias_async(payload.prompt, sentence_to_check)
-                results = await asyncio.gather(shadow_task, heuristic_task, rag_task, bias_task, return_exceptions=True)
-                shadow_res, heuristic_res, rag_res, bias_res = results
+                # Final chunk
+                if current_sentence.strip() and not cp_halted:
+                    sentence_chunk = current_sentence.strip()
+                    sentence_to_check = (previous_tail + " " + sentence_chunk).strip()
+                    shadow_task = asyncio.to_thread(shadow_engine.evaluate_side_by_side_stream, sentence_to_check)
+                    heuristic_task = asyncio.to_thread(heuristic_detector.scan, sentence_to_check)
+                    rag_task = asyncio.to_thread(run_rag_check, payload.prompt, sentence_to_check)
+                    bias_task = bias_detector.evaluate_bias_async(payload.prompt, sentence_to_check)
+                    results = await asyncio.gather(shadow_task, heuristic_task, rag_task, bias_task, return_exceptions=True)
+                    shadow_res, heuristic_res, rag_res, bias_res = results
+                    
+                    action = action_engine.evaluate(
+                        prompt=payload.prompt,
+                        sentence_to_check=sentence_to_check,
+                        heuristic_res=heuristic_res,
+                        shadow_res=shadow_res,
+                        rag_res=rag_res,
+                        bias_res=bias_res,
+                        rag_retriever=rag_retriever
+                    )
+                    session_manager.add_risk(payload.session_id, action.risk_score_to_add)
+
+                    if action.verdict == ActionVerdict.BLOCK:
+                        await queue.put({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value})
+                    elif action.verdict == ActionVerdict.EDIT:
+                        await queue.put({"cp": current_sentence + " "})
+                        await queue.put({"cp": action.correction_text, "action": action.verdict.value})
+                    elif action.verdict == ActionVerdict.FLAG:
+                        await queue.put({"cp": current_sentence})
+                        await queue.put({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value})
+                    else:
+                        await queue.put({"cp": current_sentence, "action": action.verdict.value})
                 
-                action = action_engine.evaluate(
-                    prompt=payload.prompt,
-                    sentence_to_check=sentence_to_check,
-                    heuristic_res=heuristic_res,
-                    shadow_res=shadow_res,
-                    rag_res=rag_res,
-                    bias_res=bias_res,
-                    rag_retriever=rag_retriever
-                )
-                session_manager.add_risk(payload.session_id, action.risk_score_to_add)
+                # Phase 3: Log full generated text at the end of the stream
+                final_verdict = "BLOCKED" if cp_halted else "ALLOWED"
+                current_risk = session_manager.get_cumulative_risk(payload.session_id)
+                log_incident(payload.session_id, payload.prompt, current_sentence, final_verdict, current_risk, "StreamDualArena")
 
-                if action.verdict == ActionVerdict.BLOCK:
-                    yield json.dumps({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value}) + "\n"
-                elif action.verdict == ActionVerdict.EDIT:
-                    yield json.dumps({"cp": current_sentence + " "}) + "\n"
-                    yield json.dumps({"cp": action.correction_text, "action": action.verdict.value}) + "\n"
-                elif action.verdict == ActionVerdict.FLAG:
-                    yield json.dumps({"cp": current_sentence}) + "\n"
-                    yield json.dumps({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value}) + "\n"
-                else:
-                    yield json.dumps({"cp": current_sentence, "action": action.verdict.value}) + "\n"
+            except Exception as e:
+                await queue.put({"raw": f"\n[Error: {str(e)}]", "cp": f"\n[Error: {str(e)}]"})
             
-            # Phase 3: Log full generated text at the end of the stream
-            final_verdict = "BLOCKED" if cp_halted else "ALLOWED"
-            current_risk = session_manager.get_cumulative_risk(payload.session_id)
-            log_incident(payload.session_id, payload.prompt, current_sentence, final_verdict, current_risk, "StreamDualArena")
+            await queue.put({"bad_done": True})
 
-        except Exception as e:
-            yield json.dumps({"raw": f"\n[Error: {str(e)}]", "cp": f"\n[Error: {str(e)}]"}) + "\n"
+        # Launch background tasks and stream from queue
+        asyncio.create_task(run_good_agent())
+        asyncio.create_task(run_bad_agent_with_cp())
+
+        good_done = False
+        bad_done = False
+        while not (good_done and bad_done):
+            msg = await queue.get()
+            if "good_done" in msg:
+                good_done = True
+            elif "bad_done" in msg:
+                bad_done = True
+            else:
+                yield json.dumps(msg) + "\n"
 
     return StreamingResponse(token_stream_generator(), media_type="application/x-ndjson")
 
@@ -344,6 +399,40 @@ async def stream_dual_arena(payload: PromptRequest):
 async def generate_full_response(payload: PromptRequest):
     if not os.getenv("MISTRAL_API_KEY"):
         raise HTTPException(status_code=500, detail="MISTRAL_API_KEY not configured.")
+
+    # Session blocklist check (matches streaming endpoints)
+    if session_manager.is_blocked(payload.session_id):
+        log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Multi-turn Aggregator)", 1.0, "SessionAggregator")
+        return {
+            "response": "",
+            "status": "BLOCK",
+            "flag_reasons": ["Cumulative session risk threshold exceeded (Multi-turn Salami-Slicing Mitigated)."],
+            "confidence_score": None
+        }
+
+    # Pre-flight heuristic scan on the prompt itself
+    preflight = heuristic_detector.scan(payload.prompt)
+    if preflight.has_pii or preflight.has_prompt_injection:
+        session_manager.add_risk(payload.session_id, preflight.tier1_risk_score)
+        log_incident(payload.session_id, payload.prompt, "", "BLOCKED (Preflight)", preflight.tier1_risk_score, "HeuristicDetector")
+        return {
+            "response": "",
+            "status": "BLOCK",
+            "flag_reasons": ["Prompt blocked at pre-flight: " + ", ".join(preflight.injection_vector_types + preflight.detected_pii_types)],
+            "confidence_score": None
+        }
+
+    # Pre-flight RAG policy check on the prompt
+    rag_preflight = rag_retriever.check_prompt_intent(payload.prompt)
+    if rag_preflight.policy_violated:
+        session_manager.add_risk(payload.session_id, 0.4)
+        log_incident(payload.session_id, payload.prompt, "", "BLOCKED (RAG Preflight)", 0.4, "RAGRetriever")
+        return {
+            "response": "",
+            "status": "BLOCK",
+            "flag_reasons": [f"Prompt blocked at pre-flight: Policy violation detected — {rag_preflight.violated_rule}"],
+            "confidence_score": None
+        }
 
     response = await client.agents.complete_async(
         agent_id="ag_01a048474f7872db90a903ea31477b48",

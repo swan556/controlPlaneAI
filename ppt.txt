@@ -40,18 +40,11 @@ PAGE 2: TARGET USERS & BUSINESS CASE
 - Accelerated Time-to-Market: Provides a ready-to-deploy security layer, allowing product teams to confidently ship AI features months faster.
 - Cost Savings: Prevents costly data breaches and legal liabilities associated with PII exposure.
 
-5. EMPIRICAL PERFORMANCE METRICS (RED-TEAM RESULTS)
-Based on rigorous automated testing against 40+ adversarial and benign prompts:
-- Security Efficacy (True Positive Rate): 100%. Across all 3 waves of adversarial tests (Prompt Injections, Salami-slicing, and Base64 Obfuscation), ControlPlane successfully blocked 100% of malicious probes.
-- Data Leaks (False Negative Rate): 0%. Zero sensitive PII (Employee IDs, Salaries) was leaked during testing.
-- Usability Impact (False Positive Rate): ~66% on strict default settings (2 out of 3 safe policy queries were blocked due to aggressive token-overlap grounding requirements). This is highly tunable via the Action Engine thresholds to favor user experience.
-- Latency Overhead: < 200ms. Thanks to the async sliding window architecture, the security layer evaluates in parallel, meaning the end-user stream is virtually unaffected.
-
 --------------------------------------------------------------------------------
 PAGE 3: ROADMAP, RISKS & MITIGATIONS
 --------------------------------------------------------------------------------
 
-6. PHASED ROADMAP
+5. PHASED ROADMAP
 PHASE 1: Core Firewall & Streaming (Completed)
 - Implementation of the asynchronous NDJSON streaming multiplexer.
 - Tier 1 Heuristics and regex-based PII detection.
@@ -67,7 +60,7 @@ PHASE 3: Analytics, Scale, & Enterprise Integration (Next 6 Months)
 - Multi-LLM vendor support (OpenAI, Anthropic, open-source).
 - Comprehensive analytics dashboard for CISOs to monitor threat trends and flagged interactions in real-time.
 
-7. KEY RISKS & MITIGATIONS
+6. KEY RISKS & MITIGATIONS
 - Risk: Increased Latency from multiple evaluation pathways.
   Mitigation: ControlPlane uses an asynchronous `asyncio.gather` architecture with a sliding window accumulator, evaluating chunks in parallel while the primary model streams, ensuring near-zero perceived latency for the end user.
 - Risk: False Positives degrading User Experience.
