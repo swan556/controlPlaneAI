@@ -599,27 +599,35 @@ elif mode == "🧪 Testing Arena":
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown('<div class="card-header-raw">Mistral Model (Raw & Unguarded)</div>', unsafe_allow_html=True)
-            raw_container = st.empty()
+            st.markdown('<div class="card-header-good">Mistral(normal)</div>', unsafe_allow_html=True)
+            good_container = st.empty()
 
         with col2:
-            st.markdown('<div class="card-header-cp">ControlPlane AI (Active Defense & Self-Healing)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="card-header-raw">Mistral(Hallucinating)</div>', unsafe_allow_html=True)
+            raw_container = st.empty()
+
+        with col3:
+            st.markdown('<div class="card-header-cp">ControlPlane AI (Protected)</div>', unsafe_allow_html=True)
             cp_container = st.empty()
 
         st.markdown("---")
         action_container = st.empty()
 
-        def stream_dual(endpoint, final_prompt, raw_cnt, cp_cnt, action_cnt):
+        def stream_dual(endpoint, final_prompt, good_cnt, raw_cnt, cp_cnt, action_cnt):
             try:
                 resp = requests.post(endpoint, json={"prompt": final_prompt, "session_id": st.session_state.session_id}, stream=True, timeout=15)
+                good_text = ""
                 raw_text = ""
                 cp_text = ""
                 for line in resp.iter_lines():
                     if line:
                         try:
                             data = json.loads(line.decode('utf-8'))
+                            if "good" in data:
+                                good_text += data["good"]
+                                good_cnt.markdown(f'<div class="stream-card">{good_text}▌</div>', unsafe_allow_html=True)
                             if "raw" in data:
                                 raw_text += data["raw"]
                                 raw_cnt.markdown(f'<div class="stream-card">{raw_text}▌</div>', unsafe_allow_html=True)
@@ -631,17 +639,19 @@ elif mode == "🧪 Testing Arena":
                                 if action == "BLOCK":
                                     action_cnt.error(f"**Action Taken: BLOCK** — Connection Severed | Attack/Leakage Mitigated")
                                 elif action == "EDIT":
-                                    action_cnt.warning(f"**Action Taken: EDIT** — Hallucinated claim replaced with Company Ground Truth")
+                                    action_cnt.warning(f"**Action Taken: EDIT** — Dynamic Stream Editing Applied (e.g., PII Redacted)")
                                 elif action == "FLAG":
-                                    action_cnt.warning(f"**Action Taken: FLAG** — Counterfactual Demographic Bias Detected | Logged for Review")
+                                    action_cnt.warning(f"**Action Taken: FLAG** — Warning Triggered | Logged for Review")
                                 else:
                                     action_cnt.success(f"**Action Taken: ALLOW** — Output satisfies all performance, safety, and governance thresholds")
                         except json.JSONDecodeError:
                             pass
+                good_cnt.markdown(f'<div class="stream-card">{good_text}</div>', unsafe_allow_html=True)
                 raw_cnt.markdown(f'<div class="stream-card">{raw_text}</div>', unsafe_allow_html=True)
                 cp_cnt.markdown(cp_text)
             except Exception as e:
+                good_cnt.error(f"Stream Error: {str(e)}")
                 raw_cnt.error(f"Stream Error: {str(e)}")
                 cp_cnt.error(f"Stream Error: {str(e)}")
 
-        stream_dual(f"{PROXY_API_URL}/stream-dual", actual_prompt, raw_container, cp_container, action_container)
+        stream_dual(f"{PROXY_API_URL}/stream-dual", actual_prompt, good_container, raw_container, cp_container, action_container)

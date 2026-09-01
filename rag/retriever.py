@@ -439,9 +439,9 @@ class RAGRetriever:
 
         # Intent signals that suggest the user is requesting/probing for data
         _request_signals = [
-            "what", "tell", "show", "give", "list", "reveal", "display",
+            "tell", "show", "give", "list", "reveal", "display",
             "provide", "share", "get", "fetch", "dump", "extract", "output",
-            "print", "how much", "who", "which", "where",
+            "print", "can i get", "i want"
         ]
         has_request_intent = any(signal in prompt_lower for signal in _request_signals)
 

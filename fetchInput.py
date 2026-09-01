@@ -243,10 +243,8 @@ async def stream_dual_arena(payload: PromptRequest):
         if not prompt_halted:
             rag_preflight = rag_retriever.check_prompt_intent(payload.prompt)
             if rag_preflight.policy_violated:
-                prompt_halted = True
-                session_manager.add_risk(payload.session_id, 0.4)
-                log_incident(payload.session_id, payload.prompt, "", "BLOCKED (RAG Preflight)", 0.4, "RAGRetriever")
-                yield json.dumps({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Policy Violation:** {rag_preflight.violated_rule}  \n> *Prompt blocked at pre-flight before reaching LLM.*  \n", "action": "BLOCK"}) + "\n"
+                session_manager.add_risk(payload.session_id, 0.2)
+                yield json.dumps({"cp": f"\n\n> 🚩 **[ControlPlane Pre-Flight Warning]**  \n> **Prompt Flags Policy Violation:** {rag_preflight.violated_rule}  \n> *Proceeding to LLM, but output is being strictly monitored for leaks.*  \n", "action": "FLAG"}) + "\n"
 
         import asyncio
         queue = asyncio.Queue()
@@ -275,6 +273,11 @@ async def stream_dual_arena(payload: PromptRequest):
                 current_sentence = ""
                 previous_tail = ""
                 cp_halted = prompt_halted  # If prompt was halted, CP is already halted
+                
+                # Track highest action severity for the final verdict
+                severity_map = {"ALLOW": 1, "FLAG": 2, "EDIT": 3, "BLOCK": 4}
+                highest_severity = severity_map["BLOCK"] if prompt_halted else severity_map["ALLOW"]
+                highest_verdict = "BLOCKED" if prompt_halted else "ALLOWED"
 
                 async for chunk in stream_response:
                     token = chunk.data.choices[0].delta.content
@@ -321,15 +324,19 @@ async def stream_dual_arena(payload: PromptRequest):
                             
                             session_manager.add_risk(payload.session_id, action.risk_score_to_add)
 
+                            current_severity = severity_map.get(action.verdict.value, 1)
+                            if current_severity > highest_severity:
+                                highest_severity = current_severity
+                                highest_verdict = action.verdict.value
+
                             if action.verdict == ActionVerdict.BLOCK:
-                                await queue.put({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value})
+                                await queue.put({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": highest_verdict})
                                 cp_halted = True
                             elif action.verdict == ActionVerdict.EDIT:
-                                await queue.put({"cp": sentence_chunk + " "})
-                                await queue.put({"cp": action.correction_text, "action": action.verdict.value})
+                                await queue.put({"cp": " " + action.correction_text + " ", "action": highest_verdict})
                             elif action.verdict == ActionVerdict.FLAG:
                                 await queue.put({"cp": sentence_chunk + " "})
-                                await queue.put({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value})
+                                await queue.put({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": highest_verdict})
                             else:
                                 await queue.put({"cp": sentence_chunk + " "})
 
@@ -355,21 +362,30 @@ async def stream_dual_arena(payload: PromptRequest):
                     )
                     session_manager.add_risk(payload.session_id, action.risk_score_to_add)
 
+                    current_severity = severity_map.get(action.verdict.value, 1)
+                    if current_severity > highest_severity:
+                        highest_severity = current_severity
+                        highest_verdict = action.verdict.value
+
                     if action.verdict == ActionVerdict.BLOCK:
-                        await queue.put({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": action.verdict.value})
+                        await queue.put({"cp": f"\n\n> 🛑 **[ControlPlane Intervention — BLOCKED]**  \n> **Trigger:** {action.reason}  \n> *Stream severed to prevent policy violation or data leak.*  \n", "action": highest_verdict})
                     elif action.verdict == ActionVerdict.EDIT:
-                        await queue.put({"cp": current_sentence + " "})
-                        await queue.put({"cp": action.correction_text, "action": action.verdict.value})
+                        await queue.put({"cp": " " + action.correction_text + " ", "action": highest_verdict})
                     elif action.verdict == ActionVerdict.FLAG:
                         await queue.put({"cp": current_sentence})
-                        await queue.put({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": action.verdict.value})
+                        await queue.put({"cp": f"\n\n> 🚩 **[ControlPlane Warning — FLAGGED]**  \n> **Note:** {action.reason} *(Logged for human review)*  \n", "action": highest_verdict})
                     else:
-                        await queue.put({"cp": current_sentence, "action": action.verdict.value})
+                        await queue.put({"cp": current_sentence})
                 
                 # Phase 3: Log full generated text at the end of the stream
-                final_verdict = "BLOCKED" if cp_halted else "ALLOWED"
+                if cp_halted:
+                    highest_verdict = "BLOCKED"
+                
                 current_risk = session_manager.get_cumulative_risk(payload.session_id)
-                log_incident(payload.session_id, payload.prompt, current_sentence, final_verdict, current_risk, "StreamDualArena")
+                log_incident(payload.session_id, payload.prompt, current_sentence, highest_verdict, current_risk, "StreamDualArena")
+                
+                # Signal the final verdict to the UI
+                await queue.put({"action": highest_verdict})
 
             except Exception as e:
                 await queue.put({"raw": f"\n[Error: {str(e)}]", "cp": f"\n[Error: {str(e)}]"})
