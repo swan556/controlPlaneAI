@@ -5,8 +5,8 @@ import uuid
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="Northstar Systems — Customer Portal",
-    page_icon="⭐",
+    page_title="Northstar Systems - Customer Portal",
+    page_icon="N",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -311,7 +311,7 @@ st.sidebar.markdown("""
 
 mode = st.sidebar.radio(
     "Navigate",
-    ["☁️ Dashboard", "🧪 Testing Arena"],
+    ["Dashboard", "Testing Arena"],
     label_visibility="collapsed"
 )
 
@@ -327,7 +327,7 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("""
 <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);border-radius:10px;padding:0.8rem;margin-top:0.6rem;">
-    <div style="font-size:0.72rem;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.4rem;">AI Assistant</div>
+    <div style="font-size:0.72rem;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.4rem;">Assistant</div>
     <div style="display:flex;align-items:center;gap:0.4rem;">
         <div style="width:7px;height:7px;background:#64748b;border-radius:50%;"></div>
         <span style="font-size:0.82rem;color:#64748b;font-weight:600;">Protected by ControlPlane</span>
@@ -341,13 +341,13 @@ st.sidebar.markdown("""
 #  DASHBOARD MODE
 # ═══════════════════════════════════════════════════════════════
 
-if mode == "☁️ Dashboard":
+if mode == "Dashboard":
 
     # ── Navbar ──
     st.markdown("""
     <div class="ns-navbar">
         <div class="ns-logo">
-            <div class="ns-logo-icon">⭐</div>
+            <div class="ns-logo-icon">N</div>
             <div class="ns-logo-text">Northstar Systems</div>
         </div>
         <div class="ns-nav-links">
@@ -407,7 +407,7 @@ if mode == "☁️ Dashboard":
             """, unsafe_allow_html=True)
 
         # ── Service Status ──
-        st.markdown('<div class="section-title">🟢 Service Status</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Service Status</div>', unsafe_allow_html=True)
         st.markdown("""
         <table class="status-table">
             <thead>
@@ -419,13 +419,13 @@ if mode == "☁️ Dashboard":
                 <tr><td>Northstar Edge</td><td>US West</td><td><span class="status-pill-green">Operational</span></td><td>8 ms</td></tr>
                 <tr><td>Northstar Monitor</td><td>Global</td><td><span class="status-pill-green">Operational</span></td><td>18 ms</td></tr>
                 <tr><td>Northstar API</td><td>Global</td><td><span class="status-pill-green">Operational</span></td><td>22 ms</td></tr>
-                <tr><td>Northstar Backup</td><td>US East</td><td><span class="status-pill-yellow">Maintenance</span></td><td>—</td></tr>
+                <tr><td>Northstar Backup</td><td>US East</td><td><span class="status-pill-yellow">Maintenance</span></td><td>-</td></tr>
             </tbody>
         </table>
         """, unsafe_allow_html=True)
 
         # ── Recent Activity ──
-        st.markdown('<div class="section-title" style="margin-top:1.5rem;">📋 Recent Activity</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title" style="margin-top:1.5rem;">Recent Activity</div>', unsafe_allow_html=True)
         st.markdown("""
         <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:0.8rem 1rem;">
             <div class="activity-item">
@@ -474,7 +474,7 @@ if mode == "☁️ Dashboard":
         st.markdown("""
         <div class="chat-panel-header">
             <div class="chat-panel-title">
-                Northstar AI Assistant
+                Northstar Assistant
             </div>
             <div class="cp-shield-badge">
                 ControlPlane Active
@@ -505,7 +505,7 @@ if mode == "☁️ Dashboard":
         # Render chat history
         with chat_container:
             for message in st.session_state.ns_messages:
-                avatar = "⭐" if message["role"] == "assistant" else None
+                avatar = None
                 with st.chat_message(message["role"], avatar=avatar):
                     st.markdown(message["content"])
 
@@ -573,7 +573,7 @@ if mode == "☁️ Dashboard":
                     st.markdown(prompt)
                 st.session_state.ns_messages.append({"role": "user", "content": prompt})
     
-                with st.chat_message("assistant", avatar="⭐"):
+                with st.chat_message("assistant"):
                     full_response = st.write_stream(get_ns_stream(prompt))
                 st.session_state.ns_messages.append({"role": "assistant", "content": full_response})
 
@@ -582,16 +582,16 @@ if mode == "☁️ Dashboard":
 #  TESTING ARENA MODE (untouched from original)
 # ═══════════════════════════════════════════════════════════════
 
-elif mode == "🧪 Testing Arena":
+elif mode == "Testing Arena":
 
     st.markdown("""
     <div style="text-align:center;padding:1rem;margin-bottom:1rem;">
-        <div style="font-size:2rem;font-weight:800;background:linear-gradient(90deg,#4facfe,#00f2fe);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">ControlPlane Engine</div>
-        <div style="color:#888;font-size:1rem;margin-top:0.3rem;">Real-time Mistral Agent Evaluation & Security Streaming</div>
+        <div style="font-size:2rem;font-weight:800;color:white;">ControlPlane Engine</div>
+        <div style="color:#888;font-size:1rem;margin-top:0.3rem;">Real-time Evaluation & Security Streaming</div>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("### 🧪 Concurrent Evaluation Arena")
+    st.markdown("### Concurrent Evaluation Arena")
     if prompt := st.chat_input("Test a prompt (e.g. What is Sarah Jenkins' salary?)"):
 
         actual_prompt = prompt
@@ -609,7 +609,7 @@ elif mode == "🧪 Testing Arena":
             raw_container = st.empty()
 
         with col3:
-            st.markdown('<div class="card-header-cp">ControlPlane AI (Protected)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="card-header-cp">ControlPlane (Protected)</div>', unsafe_allow_html=True)
             cp_container = st.empty()
 
         st.markdown("---")
@@ -637,13 +637,13 @@ elif mode == "🧪 Testing Arena":
                             if "action" in data:
                                 action = data["action"]
                                 if action == "BLOCK":
-                                    action_cnt.error(f"**Action Taken: BLOCK** — Connection Severed | Attack/Leakage Mitigated")
+                                    action_cnt.error(f"**Action Taken: BLOCK** - Connection Severed | Attack/Leakage Mitigated")
                                 elif action == "EDIT":
-                                    action_cnt.warning(f"**Action Taken: EDIT** — Dynamic Stream Editing Applied (e.g., PII Redacted)")
+                                    action_cnt.warning(f"**Action Taken: EDIT** - Dynamic Stream Editing Applied (e.g., PII Redacted)")
                                 elif action == "FLAG":
-                                    action_cnt.warning(f"**Action Taken: FLAG** — Warning Triggered | Logged for Review")
+                                    action_cnt.warning(f"**Action Taken: FLAG** - Warning Triggered | Logged for Review")
                                 else:
-                                    action_cnt.success(f"**Action Taken: ALLOW** — Output satisfies all performance, safety, and governance thresholds")
+                                    action_cnt.success(f"**Action Taken: ALLOW** - Output satisfies all performance, safety, and governance thresholds")
                         except json.JSONDecodeError:
                             pass
                 good_cnt.markdown(f'<div class="stream-card">{good_text}</div>', unsafe_allow_html=True)
